@@ -80,8 +80,9 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 	NSString *path = [[NSBundle mainBundle] pathForResource:@"map" ofType:@"html"];
 	NSString *html = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] : nil;
 	if (!html) { ALLog(@"map: map.html missing from bundle"); return; }
-	html = [html stringByReplacingOccurrencesOfString:@"{{LAT}}" withString:[NSString stringWithFormat:@"%f", lat]];
-	html = [html stringByReplacingOccurrencesOfString:@"{{LON}}" withString:[NSString stringWithFormat:@"%f", lon]];
+	// Placeholders are valid JS identifiers so an HTML/JS formatter won't mangle them.
+	html = [html stringByReplacingOccurrencesOfString:@"__LAT__" withString:[NSString stringWithFormat:@"%f", lat]];
+	html = [html stringByReplacingOccurrencesOfString:@"__LON__" withString:[NSString stringWithFormat:@"%f", lon]];
 
 	[self.web loadHTMLString:html baseURL:[NSURL URLWithString:@"https://tile.openstreetmap.org/"]];
 }
@@ -189,11 +190,13 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 		NSDictionary *m = meta[id_];
 		ALDeviceType t = (ALDeviceType)[m[@"type"] integerValue];
 		NSString *name = [m[@"name"] length] ? m[@"name"] : id_;
+		double ts = [m[@"ts"] doubleValue];
 		[pins addObject:@{
 			@"lat": @(elat), @"lon": @(elon),
 			@"name": name ?: @"", @"id": id_ ?: @"", @"type": [ALDevice nameForType:t],
 			@"rssi": @(best), @"n": @(n),
 			@"radius": @(radius), @"color": [self hexForType:t],
+			@"ts" : @(ts),
 			@"method": usedMLAT ? @"multilateration" : @"centroid",
 		}];
 	}

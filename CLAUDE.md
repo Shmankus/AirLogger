@@ -67,6 +67,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
     and tiles from OSM fine.
   - Leaflet `bringToFront()` on a canvas-rendered marker throws `t.parentNode` — avoid it;
     draw circles then markers in separate passes instead.
+  - `map.html` start-location placeholders are `__LAT__` / `__LON__` (valid JS identifiers),
+    NOT `{{LAT}}` mustache tokens — an HTML/JS formatter rewrites `{{ }}` into `{ }` object
+    literals, which is a parse error that kills the whole script (updateData undefined).
+    ALMapViewController.loadPage does the string replacement before loadHTMLString.
 - **Resources are copied to the bundle root.** `Resources/Info.plist` → `.app/Info.plist`,
   `Resources/map.html` → `.app/map.html` (found via `pathForResource:@"map"`).
 - **Never tear down scanners while running.** Pausing must keep the `ALWiFiScanner` /
