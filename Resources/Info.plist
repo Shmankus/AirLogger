@@ -51,5 +51,9 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>CFBundleIconFiles</key>
+	<array>
+    	<string>Icon-60@2x.png</string>
+	</array>
 </dict>
 </plist>
