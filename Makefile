@@ -13,7 +13,7 @@ TARGET = iphone:clang:latest:14.0
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = AirLogger
-
+AirLogger_RESOURCES_FOLDER = Resources
 AirLogger_FILES = main.m ALAppDelegate.m ALDevice.m ALWiFiScanner.m ALBluetoothScanner.m ALDatabase.m ALLocationProvider.m ALDeviceCell.m ALRootViewController.m ALDetailViewController.m ALHistoryViewController.m ALMapViewController.m
 AirLogger_FRAMEWORKS = UIKit Foundation CoreFoundation CoreBluetooth CoreLocation MapKit WebKit
 AirLogger_LIBRARIES = sqlite3
@@ -23,4 +23,4 @@ AirLogger_CODESIGN_FLAGS = -Sentitlements.plist
 include $(THEOS_MAKE_PATH)/application.mk
 
 after-install::
-	install.exec "uicache -a"
+	install.exec "uicache -p /var/jb/Applications/AirLogger.app"
