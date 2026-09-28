@@ -17,6 +17,7 @@ typedef int           (*WiFiNetworkGetRSSI_f)(WiFiNetworkRef);
 typedef int           (*WiFiNetworkGetChannel_f)(WiFiNetworkRef);
 typedef CFTypeRef     (*WiFiNetworkGetProperty_f)(WiFiNetworkRef, CFStringRef);
 typedef CFDataRef     (*WiFiNetworkCopyBSSIDData_f)(WiFiNetworkRef);
+typedef bool          (*WiFiNetworkBool_f)(WiFiNetworkRef);
 
 @interface ALWiFiScanner ()
 - (void)handleResults:(NSArray *)networks error:(int)error;
@@ -45,6 +46,8 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 	WiFiNetworkGetChannel_f                 _getChannel;
 	WiFiNetworkGetProperty_f                _getProperty;
 	WiFiNetworkCopyBSSIDData_f              _copyBSSID;
+	WiFiNetworkBool_f _isWEP, _isWPA, _isSAE, _isEAP, _isWAPI, _isHidden;
+	BOOL _stopped;
 }
 
 - (instancetype)init {
@@ -63,6 +66,12 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 		_getChannel  = (WiFiNetworkGetChannel_f)               dlsym(_lib, "WiFiNetworkGetChannel");
 		_getProperty = (WiFiNetworkGetProperty_f)              dlsym(_lib, "WiFiNetworkGetProperty");
 		_copyBSSID   = (WiFiNetworkCopyBSSIDData_f)            dlsym(_lib, "WiFiNetworkCopyBSSIDData");
+		_isWEP       = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsWEP");
+		_isWPA       = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsWPA");
+		_isSAE       = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsSAE");
+		_isEAP       = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsEAP");
+		_isWAPI      = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsWAPI");
+		_isHidden    = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsHidden");
 
 		ALLog(@"WiFi: create=%p sched=%p copyDev=%p scan=%p getSSID=%p",
 			  _create, _schedule, _copyDevices, _scanAsync, _getSSID);
@@ -94,6 +103,7 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 		ALLog(@"WiFi: unavailable, not starting. status=%@", self.status);
 		return;
 	}
+	_stopped = NO;
 	[self scanOnce];
 	_timer = [NSTimer scheduledTimerWithTimeInterval:6.0
 											  target:self
@@ -103,17 +113,19 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 }
 
 - (void)stop {
+	_stopped = YES;   // ignore any async scan callback that lands after this
 	[_timer invalidate];
 	_timer = nil;
 }
 
 - (void)scanOnce {
-	if (!self.available) return;
+	if (_stopped || !self.available) return;
 	NSDictionary *opts = @{};
 	_scanAsync(_device, (__bridge CFDictionaryRef)opts, ALWiFiScanCallback, (__bridge void *)self);
 }
 
 - (void)handleResults:(NSArray *)networks error:(int)error {
+	if (_stopped) return;
 	if (error != 0 || networks == nil) {
 		self.status = [NSString stringWithFormat:@"scan err=%d", error];
 		ALLog(@"WiFi: scan callback err=%d", error);
@@ -153,9 +165,35 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 		dev.type = ALDeviceTypeWiFi;
 		dev.identifier = bssid;
 		dev.name = ssid;
-		if (_getRSSI)    dev.rssi = _getRSSI(net);
-		if (_getChannel) dev.info[@"Channel"] = [NSString stringWithFormat:@"%d", _getChannel(net)];
+		if (_getRSSI) dev.rssi = _getRSSI(net);
 		dev.info[@"BSSID"] = bssid;
+
+		int channel = _getChannel ? _getChannel(net) : 0;
+		if (channel) {
+			dev.info[@"Channel"] = [NSString stringWithFormat:@"%d", channel];
+			// 2.4 GHz is channels 1-14; anything higher is 5 GHz (or 6 GHz very high).
+			dev.info[@"Band"] = (channel >= 32) ? (channel >= 233 ? @"6 GHz" : @"5 GHz") : @"2.4 GHz";
+		}
+
+		// Security type from the dedicated MobileWiFi predicates.
+		NSString *sec = @"Open";
+		if (_isSAE && _isSAE(net))       sec = @"WPA3";
+		else if (_isWPA && _isWPA(net))  sec = @"WPA/WPA2";
+		else if (_isWEP && _isWEP(net))  sec = @"WEP";
+		else if (_isWAPI && _isWAPI(net)) sec = @"WAPI";
+		if (_isEAP && _isEAP(net))       sec = [sec stringByAppendingString:@" (Enterprise)"];
+		dev.info[@"Security"] = sec;
+
+		if (_isHidden && _isHidden(net)) dev.info[@"Hidden"] = @"Yes";
+
+		// SNR from RSSI - noise floor.
+		if (_getProperty) {
+			CFTypeRef nz = _getProperty(net, CFSTR("NOISE"));
+			if (nz && CFGetTypeID(nz) == CFNumberGetTypeID()) {
+				int noise = 0; CFNumberGetValue(nz, kCFNumberIntType, &noise);
+				if (noise) dev.info[@"SNR"] = [NSString stringWithFormat:@"%ld dB", (long)(dev.rssi - noise)];
+			}
+		}
 
 		if (self.onDevice) self.onDevice(dev);
 	}
@@ -164,7 +202,8 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 - (void)dealloc {
 	[self stop];
 	if (_devices) CFRelease(_devices);
-	if (_lib) dlclose(_lib);
+	// Intentionally do NOT dlclose(_lib): MobileWiFi may still hold run-loop
+	// sources/callbacks, and unloading it out from under them crashes.
 }
 
 @end

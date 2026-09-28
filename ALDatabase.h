@@ -15,6 +15,10 @@
 // Every geotagged observation: identifier, name, type, rssi, lat, lon.
 - (NSArray<NSDictionary *> *)geotaggedObservations;
 
+// One summary row per distinct device (all history, GPS or not):
+// identifier, type, rssi (best), cnt, last (ts), name, info (json), channel.
+- (NSArray<NSDictionary *> *)allDevices;
+
 - (NSUInteger)totalSightings;
 - (NSString *)path;
 

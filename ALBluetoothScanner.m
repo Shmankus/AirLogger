@@ -13,15 +13,22 @@
 @implementation ALBluetoothScanner
 
 - (void)start {
-	// --- BLE via public CoreBluetooth ---
-	self.central = [[CBCentralManager alloc] initWithDelegate:self queue:nil options:nil];
+	// --- BLE via public CoreBluetooth --- (reuse the central across pause/resume)
+	if (!self.central) {
+		self.central = [[CBCentralManager alloc] initWithDelegate:self queue:nil options:nil];
+	} else if (self.central.state == CBManagerStatePoweredOn && !self.central.isScanning) {
+		[self.central scanForPeripheralsWithServices:nil
+											 options:@{ CBCentralManagerScanOptionAllowDuplicatesKey : @YES }];
+	}
 
 	// Live heartbeat so the status reflects the real scan state, not just discoveries.
-	self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:2.0
-													target:self
-												  selector:@selector(heartbeat)
-												  userInfo:nil
-												   repeats:YES];
+	if (!self.hbTimer) {
+		self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:2.0
+														target:self
+													  selector:@selector(heartbeat)
+													  userInfo:nil
+													   repeats:YES];
+	}
 
 	// --- Classic BT via private BluetoothManager (best-effort) ---
 	[self startClassic];
@@ -146,6 +153,10 @@
 	self.classicStatus = @"BluetoothManager loaded";
 	self.btManager = [BM performSelector:@selector(sharedInstance)];
 
+	// Remove first so resuming after a pause can't register a duplicate observer.
+	[[NSNotificationCenter defaultCenter] removeObserver:self
+													name:@"BluetoothDeviceDiscoveredNotification"
+												  object:nil];
 	[[NSNotificationCenter defaultCenter] addObserver:self
 											 selector:@selector(classicDiscovered:)
 												 name:@"BluetoothDeviceDiscoveredNotification"
@@ -187,6 +198,27 @@
 	if (major.length) d.info[@"Major Class"] = major;
 	NSString *minor = [self safeString:dev key:@"minorClassName"];
 	if (minor.length) d.info[@"Minor Class"] = minor;
+
+	// Richer fields exposed by BluetoothDevice.
+	id connected = [self safeValue:dev key:@"connected"];
+	if (connected) d.info[@"Connected"] = [connected boolValue] ? @"Yes" : @"No";
+	id paired = [self safeValue:dev key:@"paired"];
+	if (paired) d.info[@"Paired"] = [paired boolValue] ? @"Yes" : @"No";
+	NSString *product = [self safeString:dev key:@"productName"];
+	if (product.length) d.info[@"Product"] = product;
+	id vid = [self safeValue:dev key:@"vendorId"];
+	if ([vid respondsToSelector:@selector(intValue)] && [vid intValue])
+		d.info[@"Vendor ID"] = [NSString stringWithFormat:@"0x%04X", [vid intValue]];
+	id pid = [self safeValue:dev key:@"productId"];
+	if ([pid respondsToSelector:@selector(intValue)] && [pid intValue])
+		d.info[@"Product ID"] = [NSString stringWithFormat:@"0x%04X", [pid intValue]];
+	id appleAudio = [self safeValue:dev key:@"isAppleAudioDevice"];
+	if ([appleAudio boolValue]) d.info[@"Apple Audio"] = @"Yes";
+	id supportsBatt = [self safeValue:dev key:@"supportsBatteryLevel"];
+	if ([supportsBatt boolValue]) {
+		id batt = [self safeValue:dev key:@"batteryLevel"];
+		if (batt) d.info[@"Battery"] = [batt description];
+	}
 
 	if (self.onDevice) self.onDevice(d);
 }

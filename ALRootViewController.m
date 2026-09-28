@@ -36,7 +36,7 @@
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	self.title = @"AirLogger";
+	self.title = @"Current";
 	self.navigationController.navigationBar.prefersLargeTitles = YES;
 	self.tableView.backgroundColor = [UIColor systemGroupedBackgroundColor];
 	self.tableView.separatorInset = UIEdgeInsetsMake(0, 62, 0, 0);
@@ -46,10 +46,6 @@
 		[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemPause
 													  target:self
 													  action:@selector(toggleScan)];
-	self.navigationItem.leftBarButtonItem =
-		[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemTrash
-													  target:self
-													  action:@selector(clearAll)];
 
 	[self buildSummaryHeader];
 	[self startScan];
@@ -164,12 +160,11 @@
 	__weak typeof(self) weakSelf = self;
 	void (^sink)(ALDevice *) = ^(ALDevice *d) { [weakSelf ingest:d]; };
 
-	self.wifi = [[ALWiFiScanner alloc] init];
-	self.wifi.onDevice = sink;
+	// Create the scanners once and reuse them; tearing them down while an async
+	// Wi-Fi scan is in flight causes a use-after-free crash.
+	if (!self.wifi) { self.wifi = [[ALWiFiScanner alloc] init]; self.wifi.onDevice = sink; }
+	if (!self.bt)   { self.bt = [[ALBluetoothScanner alloc] init]; self.bt.onDevice = sink; }
 	[self.wifi start];
-
-	self.bt = [[ALBluetoothScanner alloc] init];
-	self.bt.onDevice = sink;
 	[self.bt start];
 
 	self.uiTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
@@ -183,25 +178,10 @@
 - (void)stopScan {
 	self.scanning = NO;
 	self.navigationItem.rightBarButtonItem.image = [UIImage systemImageNamed:@"play.fill"];
-	[self.wifi stop]; self.wifi = nil;
-	[self.bt stop];   self.bt = nil;
+	[self.wifi stop];   // keep the objects alive; just stop scanning
+	[self.bt stop];
 	[self.uiTimer invalidate]; self.uiTimer = nil;
 	[self updateSummary];
-}
-
-- (void)clearAll {
-	UIAlertController *a = [UIAlertController
-		alertControllerWithTitle:@"Erase all data?"
-						 message:@"This permanently deletes every logged sighting from the database and clears the list and map. This cannot be undone."
-				  preferredStyle:UIAlertControllerStyleAlert];
-	[a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-	[a addAction:[UIAlertAction actionWithTitle:@"Erase" style:UIAlertActionStyleDestructive
-										handler:^(UIAlertAction *action) {
-		[[ALDatabase shared] wipe];
-		[self.store removeAllObjects];
-		[self rebuildAndReload];
-	}]];
-	[self presentViewController:a animated:YES completion:nil];
 }
 
 - (void)ingest:(ALDevice *)d {

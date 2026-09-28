@@ -166,6 +166,39 @@
 	[_lastWrite removeAllObjects]; // let devices log again immediately
 }
 
+- (NSArray<NSDictionary *> *)allDevices {
+	if (!_db) return @[];
+	NSMutableArray *out = [NSMutableArray array];
+	dispatch_sync(_q, ^{
+		const char *sql =
+			"SELECT s.identifier, s.type, MAX(s.rssi) best, COUNT(*) cnt, MAX(s.ts) last, "
+			"(SELECT name FROM sightings s2 WHERE s2.identifier=s.identifier AND name IS NOT NULL ORDER BY ts DESC LIMIT 1) nm, "
+			"(SELECT info FROM sightings s3 WHERE s3.identifier=s.identifier ORDER BY ts DESC LIMIT 1) inf, "
+			"(SELECT channel FROM sightings s4 WHERE s4.identifier=s.identifier ORDER BY ts DESC LIMIT 1) ch "
+			"FROM sightings s GROUP BY s.identifier;";
+		sqlite3_stmt *st = NULL;
+		if (sqlite3_prepare_v2(self->_db, sql, -1, &st, NULL) != SQLITE_OK) return;
+		while (sqlite3_step(st) == SQLITE_ROW) {
+			const char *ident = (const char *)sqlite3_column_text(st, 0);
+			const char *nm = (const char *)sqlite3_column_text(st, 5);
+			const char *inf = (const char *)sqlite3_column_text(st, 6);
+			const char *ch = (const char *)sqlite3_column_text(st, 7);
+			[out addObject:@{
+				@"identifier": ident ? @(ident) : @"",
+				@"type": @(sqlite3_column_int(st, 1)),
+				@"rssi": @(sqlite3_column_int(st, 2)),
+				@"cnt": @(sqlite3_column_int(st, 3)),
+				@"last": @(sqlite3_column_double(st, 4)),
+				@"name": nm ? @(nm) : @"",
+				@"info": inf ? @(inf) : @"",
+				@"channel": ch ? @(ch) : @"",
+			}];
+		}
+		sqlite3_finalize(st);
+	});
+	return out;
+}
+
 - (NSUInteger)totalSightings {
 	if (!_db) return 0;
 	__block NSUInteger n = 0;

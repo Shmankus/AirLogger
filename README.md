@@ -23,17 +23,23 @@ Written in Objective‑C against Apple's private frameworks using the
 |---|---|---|
 | ![list](docs/list.png) | ![detail](docs/detail.png) | ![map](docs/map.png) |
 -->
-_Add screenshots of the device list, detail view, and map here._
+_Add screenshots here — e.g. the Current scan list, the All/search tab, a device's detail view, and the map._
 
 ## Features
 
-- **Live Wi‑Fi scanning** — SSID, BSSID, RSSI, and channel for every nearby access point.
+- **Live Wi‑Fi scanning** — SSID, BSSID, RSSI, channel, **band** (2.4/5/6 GHz),
+  **security** (WPA3/WPA/WEP/WAPI/Open, plus Enterprise), **SNR**, and hidden‑network flag
+  for every nearby access point.
 - **Bluetooth scanning** — discoverable classic Bluetooth devices via the private
-  `BluetoothManager` framework (BLE via `CoreBluetooth` is stubbed; see *Limitations*).
+  `BluetoothManager` framework, with device class, connected/paired state, product name,
+  vendor/product IDs, and battery where exposed (BLE via `CoreBluetooth` is stubbed; see
+  *Limitations*).
+- **Three tabs** — **Current** (what's around you right now), **All** (the full stored
+  history with text search over name/BSSID and a Wi‑Fi/BLE/BT filter), and **Map**.
 - **SSID grouping** — access points that share a network name collapse into one row in
   the list, with every individual BSSID still available in the detail view.
 - **GPS‑tagged logging** — every sighting is written to a local **SQLite** database with
-  a timestamp and location, so history persists across app updates.
+  a timestamp and location, so history persists across app updates and reinstalls.
 - **Position estimation** — each transmitter is placed on the map using an
   RSSI‑weighted centroid, upgraded to **least‑squares multilateration** when enough
   observations from different vantage points are available. Recent readings are weighted
@@ -85,16 +91,17 @@ The app installs to `/var/jb/Applications/AirLogger.app`. Entitlements are defin
 ## Project structure
 
 ```
-ALWiFiScanner        Wi-Fi scanning via the private MobileWiFi API (dlopen/dlsym)
-ALBluetoothScanner   Classic Bluetooth via BluetoothManager; CoreBluetooth (BLE) scaffold
-ALLocationProvider   Core Location wrapper (foreground + background)
-ALDatabase           SQLite store for GPS-tagged sightings
-ALDevice             Unified device model
-ALDeviceCell         Custom list cell (type icon, signal pill)
-ALRootViewController Live device list, grouped by radio type
+ALWiFiScanner           Wi-Fi scanning via the private MobileWiFi API (dlopen/dlsym)
+ALBluetoothScanner      Classic Bluetooth via BluetoothManager; CoreBluetooth (BLE) scaffold
+ALLocationProvider      Core Location wrapper (foreground + background)
+ALDatabase              SQLite store for GPS-tagged sightings
+ALDevice                Unified device model
+ALDeviceCell            Custom list cell (type icon, signal pill)
+ALRootViewController    "Current" tab — live device list, grouped by radio type
+ALHistoryViewController "All" tab — full stored history with search + type filter
 ALDetailViewController  Per-device field breakdown
-ALMapViewController  WKWebView + Leaflet map, position estimation
-Resources/map.html   The Leaflet map page (edit freely; data arrives via updateData())
+ALMapViewController     "Map" tab — WKWebView + Leaflet map, position estimation
+Resources/map.html      The Leaflet map page (edit freely; data arrives via updateData())
 ```
 
 ## Limitations & honest notes

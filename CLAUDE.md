@@ -69,19 +69,47 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
     draw circles then markers in separate passes instead.
 - **Resources are copied to the bundle root.** `Resources/Info.plist` → `.app/Info.plist`,
   `Resources/map.html` → `.app/map.html` (found via `pathForResource:@"map"`).
+- **Never tear down scanners while running.** Pausing must keep the `ALWiFiScanner` /
+  `ALBluetoothScanner` instances alive (stop their timers only, don't `nil` them).
+  Deallocating the Wi-Fi scanner while an async `WiFiDeviceClientScanAsync` callback is
+  in flight — its token is a non-retaining bridge — is a use-after-free, and `dlclose`-ing
+  MobileWiFi in dealloc while it holds run-loop sources also crashes. Fixed by reusing
+  scanner instances across pause/resume, a `_stopped` guard that drops late callbacks, and
+  NOT calling `dlclose`.
+
+## Available device fields (discovered via introspection)
+
+How to enumerate what's available on a given OS: for the **C API** Wi-Fi objects, call
+`CFCopyDescription()` on a scan result (prints the backing dict) and grep the SDK's
+`MobileWiFi.tbd` for `WiFiNetwork*` symbols; for the **Objective-C** private classes,
+use `class_copyMethodList` / `class_copyPropertyList` at runtime and read each value.
+
+- **Wi-Fi** (property keys via `WiFiNetworkGetProperty`, and dedicated predicates):
+  `BSSID`, `SSID_STR`, `RSSI`, `CHANNEL`, `CHANNEL_FLAGS`, `CAPABILITIES`, `AGE`, `NOISE`
+  (→ SNR), `BEACON_INT`, `AP_MODE`, `RATES`, `IE`, `80211D_IE` (country code). Security via
+  `WiFiNetworkIsWEP/IsWPA/IsSAE`(WPA3)`/IsEAP`(enterprise)`/IsWAPI/IsHidden`; band from the
+  channel number (1-14 = 2.4 GHz, else 5/6 GHz) or `WiFiNetworkGetOperatingBand`.
+- **Bluetooth** (`BluetoothDevice` methods): `name`, `address`, `RSSI`, `majorClass`/
+  `minorClass` (+`majorClassName`/`minorClassName`), `connected`, `paired`, `batteryLevel`
+  (+`supportsBatteryLevel`), `vendorId`, `productId`, `productName`, `isAppleAudioDevice`,
+  `isAccessory`, `connectedServices`. `BluetoothManager` also offers `connectedDevices`,
+  `pairedDevices`, `bluetoothState`, `localAddress`.
 
 ## Architecture / file map
 
 ```
 main.m                  entry point
-ALAppDelegate           UITabBarController: Devices tab + Map tab
+ALAppDelegate           UITabBarController: Current (live) / All (history) / Map tabs
 ALWiFiScanner           Wi-Fi via MobileWiFi (dlopen); async scan every ~6s
 ALBluetoothScanner      Classic BT via BluetoothManager; CoreBluetooth (BLE) scaffold
 ALLocationProvider      Core Location singleton; background updates enabled
-ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlogger.sqlite
+ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlogger.sqlite;
+                        bestLocationsPerDevice / geotaggedObservations / allDevices / wipe
 ALDevice                unified device model (type, id, name, rssi, info, children)
 ALDeviceCell            custom list cell (type icon + signal pill)
-ALRootViewController    live device list, grouped by radio type; SSID grouping; trash=wipe DB
+ALRootViewController    "Current" tab: live scan list, grouped by radio type; SSID grouping
+ALHistoryViewController "All" tab: full DB history via allDevices; UISearchController with
+                        text search + type scope bar; title tracks scope; trash = wipe DB
 ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi)
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s
