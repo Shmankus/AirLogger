@@ -1,0 +1,9 @@
+Package: com.shmank.airlogger
+Name: AirLogger
+Version: 0.0.1
+Architecture: iphoneos-arm64
+Description: Logs nearby WiFi and Bluetooth (BLE + classic) devices and shows their info per device.
+Maintainer: shmank
+Author: shmank
+Section: Utilities
+Depends: firmware (>= 14.0)

@@ -1,0 +1,27 @@
+# Theos build output
+.theos/
+packages/
+obj/
+*.deb
+
+# Local device config (IP / user) — keep private, not committed
+Makefile.local
+
+# Wardriving data & logs — these live on-device; never commit them
+*.sqlite
+*.sqlite-journal
+*.db
+*.log
+
+# Leftover build junk from environment setup
+install-theos.sh
+libxml2
+libxml2_*.deb
+libxml2_*.buildinfo
+libxml2_*.changes
+entitlements.full.plist
+
+# OS / editor
+.DS_Store
+*.swp
+*~

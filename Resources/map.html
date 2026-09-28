@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body, #map { height: 100%; margin: 0; background: #1c1c1e; }
+  /* Invert the OSM tiles into a dark basemap; markers live in a separate pane. */
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #2c2c2e; color: #fff; }
+  .leaflet-popup-content { font: 13px -apple-system, sans-serif; }
+  .leaflet-container a { color: #0a84ff; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+try {
+  var map = L.map('map', { zoomControl: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              { maxZoom: 19, attribution: '(c) OpenStreetMap' }).addTo(map);
+
+  var userMarker = L.circleMarker([{{LAT}}, {{LON}}],
+    { radius: 6, color: '#ff6464', weight: 2, fillColor: '#ad0149', fillOpacity: 1 })
+    .addTo(map).bindPopup('You');
+
+  var deviceLayer = L.layerGroup().addTo(map);
+  var markers = {};      // id -> { m, cur:[lat,lon], target:[lat,lon] }
+  var didFit = false;
+  map.setView([{{LAT}}, {{LON}}], 16);
+
+  function distm(a, b) {
+    var dy = (a[0] - b[0]) * 111320;
+    var dx = (a[1] - b[1]) * 111320 * Math.cos(a[0] * Math.PI / 180);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // Popup HTML for a device pin.
+  function ph(p) {
+    return '<b>' + p.name + '</b><br>' +
+           '<span style="font-family:monospace;opacity:0.7">' + p.id + '</span><br>' +
+           p.type + ' &middot; ' + p.rssi + ' dBm<br>' +
+           p.n + ' obs &middot; ~' + Math.round(p.radius) + ' m &middot; ' + p.method;
+  }
+
+  // Called from native every few seconds with { u:[lat,lon], pins:[...] }.
+  window.updateData = function (d) {
+    try {
+      userMarker.setLatLng(d.u);
+      var seen = {}, pts = [];
+
+      d.pins.forEach(function (p) {
+        seen[p.id] = 1;
+        var e = markers[p.id];
+        if (e) {
+          // Existing device: retarget (tick() eases it there) and refresh popup.
+          e.target = [p.lat, p.lon];
+          if (e.m.getPopup()) e.m.getPopup().setContent(ph(p));
+        } else {
+          var m = L.circleMarker([p.lat, p.lon],
+            { radius: 6, color: '#fff', weight: 1.5, fillColor: p.color, fillOpacity: 0.95 });
+          m.bindPopup(ph(p));
+          m.addTo(deviceLayer);
+          markers[p.id] = { m: m, cur: [p.lat, p.lon], target: [p.lat, p.lon] };
+        }
+        if (distm([p.lat, p.lon], d.u) < 2000) pts.push([p.lat, p.lon]);
+      });
+
+      // Drop markers for devices no longer present (e.g. after a wipe).
+      for (var id in markers) {
+        if (!seen[id]) { deviceLayer.removeLayer(markers[id].m); delete markers[id]; }
+      }
+
+      // Fit once; afterward leave the user's pan/zoom alone (refresh re-fits).
+      if (!didFit) {
+        pts.push(d.u);
+        if (pts.length > 1) map.fitBounds(pts, { padding: [40, 40], maxZoom: 18 });
+        else map.setView(d.u, 16);
+        didFit = true;
+      }
+      userMarker.bringToFront();
+    } catch (e) {
+      try { window.webkit.messageHandlers.err.postMessage('upd: ' + e.message); } catch (x) {}
+    }
+  };
+
+  // Smoothly ease each marker toward its target position.
+  function tick() {
+    for (var id in markers) {
+      var e = markers[id], c = e.cur, t = e.target;
+      var dlat = t[0] - c[0], dlon = t[1] - c[1];
+      if (Math.abs(dlat) > 1e-7 || Math.abs(dlon) > 1e-7) {
+        c[0] += dlat * 0.18;
+        c[1] += dlon * 0.18;
+        if (Math.abs(t[0] - c[0]) < 1e-7) c[0] = t[0];
+        if (Math.abs(t[1] - c[1]) < 1e-7) c[1] = t[1];
+        e.m.setLatLng(c);
+        var pu = e.m.getPopup();
+        if (pu && pu.isOpen()) pu.setLatLng(c);   // keep an open popup on the dot
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+} catch (e) {
+  try { window.webkit.messageHandlers.err.postMessage('init: ' + e.message); } catch (x) {}
+}
+</script>
+</body>
+</html>
