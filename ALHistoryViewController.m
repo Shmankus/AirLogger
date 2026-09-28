@@ -26,7 +26,7 @@
 	self.search.searchResultsUpdater = self;
 	self.search.obscuresBackgroundDuringPresentation = NO;
 	self.search.searchBar.placeholder = @"Search name or address";
-	self.search.searchBar.scopeButtonTitles = @[@"All", @"Wi-Fi", @"BLE", @"BT"];
+	self.search.searchBar.scopeButtonTitles = @[@"All", @"Wi-Fi", @"BT"];
 	self.search.searchBar.delegate = self;
 	self.navigationItem.searchController = self.search;
 	self.navigationItem.hidesSearchBarWhenScrolling = NO;
@@ -76,17 +76,16 @@
 
 - (void)applyFilter {
 	NSString *q = self.search.searchBar.text.lowercaseString;
-	NSInteger scope = self.search.searchBar.selectedScopeButtonIndex; // 0 all,1 wifi,2 ble,3 bt
+	NSInteger scope = self.search.searchBar.selectedScopeButtonIndex; // 0 all,1 wifi,2 bt
 
-	NSArray *scopeNames = @[@"All", @"Wi-Fi", @"BLE", @"BT"];
+	NSArray *scopeNames = @[@"All", @"Wi-Fi", @"BT"];
 	self.title = [NSString stringWithFormat:@"%@ Devices",
-				  scopeNames[(scope >= 0 && scope < 4) ? scope : 0]];
+				  scopeNames[(scope >= 0 && scope < (NSInteger)scopeNames.count) ? scope : 0]];
 
 	NSMutableArray *out = [NSMutableArray array];
 	for (ALDevice *d in self.all) {
 		if (scope == 1 && d.type != ALDeviceTypeWiFi) continue;
-		if (scope == 2 && d.type != ALDeviceTypeBLE) continue;
-		if (scope == 3 && d.type != ALDeviceTypeClassicBT) continue;
+		if (scope == 2 && d.type != ALDeviceTypeClassicBT) continue;
 		if (q.length &&
 			![d.name.lowercaseString containsString:q] &&
 			![d.identifier.lowercaseString containsString:q]) continue;

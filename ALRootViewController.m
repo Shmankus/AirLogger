@@ -7,6 +7,16 @@
 #import "ALDatabase.h"
 #import "ALLocationProvider.h"
 
+// "Live" mode shows only devices seen within this window (longer than the ~6s
+// Wi-Fi scan cycle so present APs don't flicker out); "Session" shows all found.
+static const NSTimeInterval kLiveWindow = 30.0;
+
+// Sections shown in the Current list. BLE is hidden because CoreBluetooth scanning
+// is blocked for this sideloaded app, so it never populates. These index into
+// self.sections, which is stored by ALDeviceType (wifi=0, ble=1, classic=2).
+static const ALDeviceType kDisplaySections[] = { ALDeviceTypeWiFi, ALDeviceTypeClassicBT };
+static const NSInteger kDisplaySectionCount = 2;
+
 @interface ALRootViewController ()
 @property (nonatomic, strong) ALWiFiScanner *wifi;
 @property (nonatomic, strong) ALBluetoothScanner *bt;
@@ -22,6 +32,8 @@
 @property (nonatomic, strong) UIView *statusPill;
 @property (nonatomic, strong) UIView *statusDot;
 @property (nonatomic, strong) UILabel *statusPillLabel;
+@property (nonatomic, strong) UISegmentedControl *modeControl;
+@property (nonatomic) NSInteger mode; // 0 = Live (recent), 1 = Session (all found)
 @end
 
 @implementation ALRootViewController
@@ -54,7 +66,7 @@
 - (void)viewDidLayoutSubviews {
 	[super viewDidLayoutSubviews];
 	if (self.summaryHeader) {
-		CGFloat h = 92;
+		CGFloat h = 132;
 		if (self.summaryHeader.frame.size.width != self.tableView.bounds.size.width ||
 			self.summaryHeader.frame.size.height != h) {
 			self.summaryHeader.frame = CGRectMake(0, 0, self.tableView.bounds.size.width, h);
@@ -66,7 +78,7 @@
 #pragma mark - Summary header
 
 - (void)buildSummaryHeader {
-	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 92)];
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 132)];
 
 	UIView *card = [[UIView alloc] init];
 	card.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
@@ -109,6 +121,12 @@
 	_statusPillLabel.translatesAutoresizingMaskIntoConstraints = NO;
 	[_statusPill addSubview:_statusPillLabel];
 
+	_modeControl = [[UISegmentedControl alloc] initWithItems:@[@"Live", @"Session"]];
+	_modeControl.selectedSegmentIndex = 0;
+	[_modeControl addTarget:self action:@selector(modeChanged:) forControlEvents:UIControlEventValueChanged];
+	_modeControl.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:_modeControl];
+
 	[NSLayoutConstraint activateConstraints:@[
 		[card.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
 		[card.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16],
@@ -116,12 +134,12 @@
 		[card.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-8],
 
 		[_totalLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
-		[_totalLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:14],
+		[_totalLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
 		[_totalCaption.leadingAnchor constraintEqualToAnchor:_totalLabel.leadingAnchor constant:2],
 		[_totalCaption.topAnchor constraintEqualToAnchor:_totalLabel.bottomAnchor constant:0],
 
 		[_statusPill.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-		[_statusPill.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+		[_statusPill.centerYAnchor constraintEqualToAnchor:_totalLabel.centerYAnchor],
 		[_statusPill.heightAnchor constraintEqualToConstant:26],
 		[_statusDot.leadingAnchor constraintEqualToAnchor:_statusPill.leadingAnchor constant:12],
 		[_statusDot.centerYAnchor constraintEqualToAnchor:_statusPill.centerYAnchor],
@@ -130,18 +148,30 @@
 		[_statusPillLabel.leadingAnchor constraintEqualToAnchor:_statusDot.trailingAnchor constant:7],
 		[_statusPillLabel.trailingAnchor constraintEqualToAnchor:_statusPill.trailingAnchor constant:-12],
 		[_statusPillLabel.centerYAnchor constraintEqualToAnchor:_statusPill.centerYAnchor],
+
+		[_modeControl.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+		[_modeControl.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+		[_modeControl.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14],
+		[_modeControl.heightAnchor constraintEqualToConstant:30],
 	]];
 
 	self.summaryHeader = header;
 	self.tableView.tableHeaderView = header;
 }
 
+- (void)modeChanged:(UISegmentedControl *)sender {
+	self.mode = sender.selectedSegmentIndex;
+	[self rebuildAndReload];
+}
+
 - (void)updateSummary {
-	NSUInteger total = self.store.count;
+	// Count reflects what's actually shown (mode-filtered, displayed sections only).
+	NSUInteger total = 0;
+	for (NSInteger i = 0; i < kDisplaySectionCount; i++) total += self.sections[kDisplaySections[i]].count;
 	self.totalLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)total];
 	NSString *gps = [ALLocationProvider shared].status ?: @"—";
-	self.totalCaption.text = [NSString stringWithFormat:@"%@ in range  ·  GPS %@",
-							  (total == 1 ? @"device" : @"devices"), gps];
+	NSString *scope = (self.mode == 0) ? @"nearby now" : @"found this session";
+	self.totalCaption.text = [NSString stringWithFormat:@"%@  ·  GPS %@", scope, gps];
 	self.statusDot.backgroundColor = self.scanning ? [UIColor systemGreenColor] : [UIColor systemGrayColor];
 	self.statusPillLabel.text = self.scanning ? @"Scanning" : @"Paused";
 }
@@ -201,10 +231,13 @@
 }
 
 - (void)rebuildAndReload {
+	NSTimeInterval now = [NSDate date].timeIntervalSince1970;
 	NSMutableArray *wifi = [NSMutableArray array];
 	NSMutableArray *ble = [NSMutableArray array];
 	NSMutableArray *classic = [NSMutableArray array];
 	for (ALDevice *d in self.store.allValues) {
+		// Live mode: only devices seen within the recent window.
+		if (self.mode == 0 && (now - d.lastSeen.timeIntervalSince1970) > kLiveWindow) continue;
 		if (d.type == ALDeviceTypeWiFi) [wifi addObject:d];
 		else if (d.type == ALDeviceTypeBLE) [ble addObject:d];
 		else [classic addObject:d];
@@ -270,15 +303,15 @@
 
 #pragma mark - Table
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 3; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return kDisplaySectionCount; }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	NSUInteger n = self.sections[section].count;
+	NSUInteger n = self.sections[kDisplaySections[section]].count;
 	return n == 0 ? 1 : n; // one placeholder row when empty
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)ip {
-	NSArray *items = self.sections[ip.section];
+	NSArray *items = self.sections[kDisplaySections[ip.section]];
 	if (items.count == 0) {
 		UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
 		cell.textLabel.text = self.scanning ? @"Scanning…" : @"No devices";
@@ -303,7 +336,7 @@
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)ip {
 	[tableView deselectRowAtIndexPath:ip animated:YES];
-	NSArray *items = self.sections[ip.section];
+	NSArray *items = self.sections[kDisplaySections[ip.section]];
 	if (items.count == 0) return;
 	ALDevice *d = items[ip.row];
 	ALDetailViewController *vc = [[ALDetailViewController alloc] initWithDevice:d];
@@ -315,10 +348,11 @@
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section { return 46; }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	ALDeviceType t = kDisplaySections[section];
 	UIView *v = [[UIView alloc] init];
 
 	UIView *dot = [[UIView alloc] init];
-	dot.backgroundColor = [ALDeviceCell colorForType:(ALDeviceType)section];
+	dot.backgroundColor = [ALDeviceCell colorForType:t];
 	dot.layer.cornerRadius = 5;
 	dot.translatesAutoresizingMaskIntoConstraints = NO;
 	[v addSubview:dot];
@@ -327,8 +361,7 @@
 	title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold];
 	title.textColor = [UIColor labelColor];
 	title.text = [NSString stringWithFormat:@"%@  %lu",
-				  [ALDevice nameForType:(ALDeviceType)section],
-				  (unsigned long)self.sections[section].count];
+				  [ALDevice nameForType:t], (unsigned long)self.sections[t].count];
 	title.translatesAutoresizingMaskIntoConstraints = NO;
 	[v addSubview:title];
 
@@ -336,7 +369,7 @@
 	status.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
 	status.textColor = [UIColor tertiaryLabelColor];
 	status.textAlignment = NSTextAlignmentRight;
-	status.text = [self statusForSection:section];
+	status.text = [self statusForSection:t];
 	status.translatesAutoresizingMaskIntoConstraints = NO;
 	[status setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
 	[v addSubview:status];
