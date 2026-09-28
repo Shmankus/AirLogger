@@ -1,0 +1,114 @@
+# CLAUDE.md — AirLogger
+
+Context for working on this project. AirLogger is a native iOS app for a **rootless
+jailbroken iPhone** that scans nearby Wi-Fi and Bluetooth devices, GPS-tags each
+sighting, logs to SQLite, and estimates transmitter locations on a map. Objective-C,
+built with Theos.
+
+## Target device & environment
+
+- **Device:** iPhone 7 (arm64, A10), **iOS 15.2.1**, rootless **Dopamine** jailbreak.
+- **Build host:** Linux (`shmerver`), Theos at `/opt/theos`, SDK `iPhoneOS16.5.sdk`
+  (deployment target 14.0). Always `export THEOS=/opt/theos` before building.
+- **App bundle id:** `com.shmank.airlogger`; installs to `/var/jb/Applications/AirLogger.app`.
+- **SSH to device:** `root@<ip>` with a key (passwordless). Device config is in the
+  **gitignored `Makefile.local`** (`THEOS_DEVICE_IP` / `PORT` / `USER=root`).
+
+## Build / deploy / debug commands
+
+```sh
+export THEOS=/opt/theos
+make package          # build rootless .deb into ./packages
+make do               # build + install over SSH + uicache (uses Makefile.local)
+make clean && make do # REQUIRED after editing entitlements.plist (see below)
+```
+
+- **Installs need root:** `dpkg` needs superuser, so `THEOS_DEVICE_USER = root`
+  (installing as `mobile` fails; `mobile` has no passwordless sudo here).
+- **Relaunch on device:** `ssh root@<ip> 'killall AirLogger'`, then the user taps the
+  icon. `uiopen --bundleid com.shmank.airlogger` launches it, **but only foregrounds /
+  runs the UI if the screen is unlocked** — a locked-screen launch won't run
+  `viewDidLoad`/scanning, so UI testing must be done by the user on an unlocked device.
+
+## Hard-won gotchas (do not relearn these)
+
+- **Swift/SwiftUI is NOT possible** on the Linux build host — no Swift compiler can
+  cross-compile to iOS/Darwin here. Objective-C / UIKit only. (SwiftUI would need macOS.)
+- **Wi-Fi:** the legacy `Apple80211*` C API is **gone on iOS 15**. Use the
+  `WiFiManagerClient` / `WiFiDeviceClient` family in `MobileWiFi.framework`, resolved with
+  `dlopen`/`dlsym` (symbol names came from the SDK's `MobileWiFi.tbd`). Scanning is async:
+  `WiFiManagerClientCreate` → `ScheduleWithRunLoop` → `CopyDevices` → `WiFiDeviceClientScanAsync`
+  with a callback; parse results with `WiFiNetworkGetSSID/RSSI/Channel`.
+- **Bluetooth needs privileged entitlements:** `bluetoothd` silently refuses to deliver
+  scan results to a sideloaded app until it carries **`com.apple.bluetooth.internal`** and
+  **`com.apple.bluetooth.system`** (plus `com.apple.bluetooth.access`). The jailbroken AMFI
+  accepts arbitrary ldid entitlements. Classic Bluetooth (private `BluetoothManager`) then works.
+- **BLE (CoreBluetooth) does NOT work.** Even authorized (`CBManagerAuthorization=3`,
+  powered on, scanning), `bluetoothd` never delivers `didDiscoverPeripheral` to this
+  ad-hoc-signed app. The code path exists but yields nothing. Don't burn time re-trying;
+  it's a daemon-side gate on sideloaded apps.
+- **The app CANNOT write its own sandbox container** (`Documents`/`tmp` are denied under
+  this entitlement set). Writable system paths (`/var/mobile/...`, `/var/tmp`, `/tmp`) work.
+  So the **SQLite DB and log live at `/var/mobile/Library/AirLogger/`** — also survives
+  reinstalls and is SSH-inspectable.
+- **iOS has no `log` CLI** (that's macOS-only). Debug via file logging: `ALLog()` in
+  `ALLog.h` appends to `/var/mobile/Library/AirLogger/airlogger.log`. Read it over SSH.
+- **Entitlements only re-embed on a relink.** Theos signs during the link step, so editing
+  `entitlements.plist` without a source change is a no-op — run `make clean && make do`.
+  Verify with `ldid -e /var/jb/Applications/AirLogger.app/AirLogger`.
+- **`platform-application` entitlement is intentionally NOT used** — it doesn't help and
+  isn't needed (Bluetooth works via the `bluetooth.*` entitlements alone).
+- **MapKit renders nothing** on this device: Maps.app and its tile engine were removed, so
+  `MKMapView` never starts a map session (grey tiles, `loadTileAtPath` never called). The
+  map is therefore a **`WKWebView` running Leaflet** pulling OSM tiles over HTTPS.
+  - Dark theme = OSM tiles + CSS `filter: invert(1) hue-rotate(180deg) ...`
+    (**CartoDB dark tiles now require an API key** — don't use them).
+  - The app **does** have outbound network (verified) — WKWebView loads Leaflet from a CDN
+    and tiles from OSM fine.
+  - Leaflet `bringToFront()` on a canvas-rendered marker throws `t.parentNode` — avoid it;
+    draw circles then markers in separate passes instead.
+- **Resources are copied to the bundle root.** `Resources/Info.plist` → `.app/Info.plist`,
+  `Resources/map.html` → `.app/map.html` (found via `pathForResource:@"map"`).
+
+## Architecture / file map
+
+```
+main.m                  entry point
+ALAppDelegate           UITabBarController: Devices tab + Map tab
+ALWiFiScanner           Wi-Fi via MobileWiFi (dlopen); async scan every ~6s
+ALBluetoothScanner      Classic BT via BluetoothManager; CoreBluetooth (BLE) scaffold
+ALLocationProvider      Core Location singleton; background updates enabled
+ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlogger.sqlite
+ALDevice                unified device model (type, id, name, rssi, info, children)
+ALDeviceCell            custom list cell (type icon + signal pill)
+ALRootViewController    live device list, grouped by radio type; SSID grouping; trash=wipe DB
+ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi)
+ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
+Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s
+ALLog.h                 file logger (no `log` CLI on iOS)
+entitlements.plist      wifi.* + bluetooth.access/internal/system
+```
+
+## Data & estimation
+
+- **DB schema** (`sightings`): `id, ts, type, identifier, name, rssi, channel, info(json),
+  lat, lon, h_acc`. Inserts throttled to once per identifier per 5s. Inspect over SSH:
+  `sqlite3 /var/mobile/Library/AirLogger/airlogger.sqlite "SELECT ..."`.
+- **`type`** enum: 0 = Wi-Fi, 1 = BLE, 2 = Classic BT.
+- **Identifier** is the stable key: BSSID (Wi-Fi), UUID (BLE), MAC (classic). Wi-Fi is
+  grouped by SSID in the list only; the map keeps one pin per BSSID.
+- **Position estimate** (in `ALMapViewController.computePinsJSON`): project observations to
+  a local metric frame, compute an RSSI-weighted (and recency-weighted, τ≈600s) centroid,
+  and upgrade to recency-weighted least-squares **multilateration** when `n>=3` and a
+  distance cap holds. Path-loss model: `d = 10^((TxRef - rssi)/(10·n))`, `TxRef=-45`, `n=2.7`.
+  It's approximate by nature (single-receiver RSSI). Note: the user removed stricter
+  geometry guards in favor of the looser `n>=3` behavior, accepting that a strong nearby AP
+  can be misplaced.
+
+## Conventions
+
+- Objective-C, ARC (`-fobjc-arc`), `AL` class prefix, tabs for indentation.
+- Match the surrounding style; keep private frameworks accessed via `dlopen`/runtime, never
+  link-time.
+- Never commit the SQLite DB or logs (they contain SSIDs + GPS traces) — `.gitignore`
+  covers `*.sqlite`/`*.log`. Device IP stays in `Makefile.local` (gitignored).
