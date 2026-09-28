@@ -76,6 +76,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   MobileWiFi in dealloc while it holds run-loop sources also crashes. Fixed by reusing
   scanner instances across pause/resume, a `_stopped` guard that drops late callbacks, and
   NOT calling `dlclose`.
+- **BLE is hidden in the UI**, not removed. The scanner code and the `ble` section-building
+  still exist; the Current tab just omits it via `kDisplaySections` and the All tab's scope
+  bar drops it. Re-enable by adding `ALDeviceTypeBLE` back to `kDisplaySections` if
+  CoreBluetooth ever starts delivering.
 
 ## Available device fields (discovered via introspection)
 
@@ -107,9 +111,12 @@ ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlog
                         bestLocationsPerDevice / geotaggedObservations / allDevices / wipe
 ALDevice                unified device model (type, id, name, rssi, info, children)
 ALDeviceCell            custom list cell (type icon + signal pill)
-ALRootViewController    "Current" tab: live scan list, grouped by radio type; SSID grouping
+ALRootViewController    "Current" tab: live scan list; Live (last 30s, kLiveWindow) /
+                        Session toggle; SSID grouping; BLE section hidden via
+                        kDisplaySections (shows Wi-Fi + Classic only)
 ALHistoryViewController "All" tab: full DB history via allDevices; UISearchController with
-                        text search + type scope bar; title tracks scope; trash = wipe DB
+                        text search + scope bar (All / Wi-Fi / BT); title tracks scope;
+                        trash = wipe DB
 ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi)
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s
