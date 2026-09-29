@@ -9,6 +9,7 @@
 #import "ALBluetoothScanner.h"
 #import "ALLog.h"
 #import "ALVendor.h"
+#import "ALAdvDecoder.h"
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <dlfcn.h>
 #import <objc/message.h>
@@ -155,20 +156,24 @@ static NSString *ALCBKey(const char *sym) {
 	}
 
 	NSArray *uuids = adv[CBAdvertisementDataServiceUUIDsKey];
-	if (uuids.count) {
-		NSMutableArray *s = [NSMutableArray array];
-		for (CBUUID *u in uuids) [s addObject:u.UUIDString];
-		d.info[@"Service UUIDs"] = [s componentsJoinedByString:@", "];
-	}
+	NSMutableArray<NSString *> *uuidStrings = [NSMutableArray array];
+	for (CBUUID *u in uuids) [uuidStrings addObject:u.UUIDString];
+	if (uuidStrings.count) d.info[@"Service UUIDs"] = [uuidStrings componentsJoinedByString:@", "];
 
 	NSDictionary *svcData = adv[CBAdvertisementDataServiceDataKey];
+	NSMutableDictionary<NSString *, NSData *> *svcByString = [NSMutableDictionary dictionary];
 	if (svcData.count) {
 		NSMutableArray *s = [NSMutableArray array];
 		[svcData enumerateKeysAndObjectsUsingBlock:^(CBUUID *k, NSData *v, BOOL *stop) {
+			svcByString[k.UUIDString] = v;
 			[s addObject:[NSString stringWithFormat:@"%@=%@", k.UUIDString, [self hex:v]]];
 		}];
 		d.info[@"Service Data"] = [s componentsJoinedByString:@"\n"];
 	}
+
+	// Device kind / OS family / AirPods batteries etc. from the raw advertisement.
+	[ALAdvDecoder decodeManufacturerData:mfg serviceData:svcByString
+							serviceUUIDs:uuidStrings localName:localName into:d.info];
 
 	d.info[@"UUID"] = d.identifier;
 
@@ -236,6 +241,7 @@ static NSString *ALCBKey(const char *sym) {
 	if (major.length) d.info[@"Major Class"] = major;
 	NSString *minor = [self safeString:dev key:@"minorClassName"];
 	if (minor.length) d.info[@"Minor Class"] = minor;
+	if (minor.length || major.length) d.info[@"Device Kind"] = minor.length ? minor : major;
 
 	// Richer fields exposed by BluetoothDevice.
 	id connected = [self safeValue:dev key:@"connected"];
@@ -245,8 +251,12 @@ static NSString *ALCBKey(const char *sym) {
 	NSString *product = [self safeString:dev key:@"productName"];
 	if (product.length) d.info[@"Product"] = product;
 	id vid = [self safeValue:dev key:@"vendorId"];
-	if ([vid respondsToSelector:@selector(intValue)] && [vid intValue])
+	if ([vid respondsToSelector:@selector(intValue)] && [vid intValue]) {
 		d.info[@"Vendor ID"] = [NSString stringWithFormat:@"0x%04X", [vid intValue]];
+		// 0x1D6B = Linux Foundation: the device runs the Linux Bluetooth stack (BlueZ).
+		if ([vid intValue] == 0x1D6B) d.info[@"OS Family"] = @"Linux";
+		else if ([vid intValue] == 0x004C) d.info[@"OS Family"] = @"Apple";
+	}
 	id pid = [self safeValue:dev key:@"productId"];
 	if ([pid respondsToSelector:@selector(intValue)] && [pid intValue])
 		d.info[@"Product ID"] = [NSString stringWithFormat:@"0x%04X", [pid intValue]];

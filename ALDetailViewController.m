@@ -42,7 +42,8 @@
 	[identity addObject:@[@"Type", [ALDevice nameForType:self.device.type]]];
 	[identity addObject:@[@"Name", self.device.displayName]];
 	if (!grouped) [identity addObject:@[@"Identifier", self.device.identifier ?: @"—"]];
-	if (self.device.info[@"Manufacturer"]) [identity addObject:@[@"Manufacturer", self.device.info[@"Manufacturer"]]];
+	for (NSString *k in @[@"Device Kind", @"OS Family", @"Manufacturer"])
+		if (self.device.info[k]) [identity addObject:@[k, [self.device.info[k] description]]];
 
 	NSMutableArray *signal = [NSMutableArray array];
 	NSString *rssiText = grouped ? @"strongest" : @"RSSI";
@@ -82,7 +83,8 @@
 	NSArray *keys = [self.device.info.allKeys sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
 	for (NSString *k in keys) {
 		if ([k isEqualToString:@"BSSID"] || [k isEqualToString:@"UUID"] ||
-			[k isEqualToString:@"Access Points"] || [k isEqualToString:@"Manufacturer"]) continue; // shown elsewhere
+			[k isEqualToString:@"Access Points"] || [k isEqualToString:@"Manufacturer"] ||
+			[k isEqualToString:@"Device Kind"] || [k isEqualToString:@"OS Family"]) continue; // shown in Identity
 		[details addObject:@[k, [self.device.info[k] description]]];
 	}
 

@@ -169,6 +169,9 @@
 	if (d.children.count)      [meta addObject:[NSString stringWithFormat:@"%lu APs", (unsigned long)d.children.count]];
 	if (d.info[@"Channels"])   [meta addObject:[NSString stringWithFormat:@"ch %@", d.info[@"Channels"]]];
 	else if (d.info[@"Channel"]) [meta addObject:[NSString stringWithFormat:@"ch %@", d.info[@"Channel"]]];
+	NSString *gen = d.info[@"Wi-Fi Generation"]; // "Wi-Fi 6 (802.11ax)" -> "Wi-Fi 6"
+	if (gen) [meta addObject:[gen componentsSeparatedByString:@" ("].firstObject];
+	if (d.info[@"Device Kind"]) [meta addObject:d.info[@"Device Kind"]];
 	if (d.info[@"Manufacturer"]) [meta addObject:d.info[@"Manufacturer"]];
 	else if (d.info[@"Company ID"]) [meta addObject:d.info[@"Company ID"]];
 	if (d.info[@"Connectable"])[meta addObject:[@"conn: " stringByAppendingString:d.info[@"Connectable"]]];
