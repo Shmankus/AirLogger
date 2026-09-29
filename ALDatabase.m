@@ -6,7 +6,7 @@
 //  and this path survives reinstalls). Handles throttled, movement-gated writes
 //  with a per-device row cap (see the storage policy below), and the
 //  aggregate queries that back the map (best/observed locations) and the
-//  history list (allDevices), plus wipe.
+//  history list (allDevices), the latest speed test per access point, plus wipe.
 //
 
 #import "ALDatabase.h"
@@ -75,7 +75,13 @@ static const double kMinMoveMeters = 10.0;
 		"  info TEXT,"
 		"  lat REAL, lon REAL, h_acc REAL"
 		");"
-		"CREATE INDEX IF NOT EXISTS idx_ident ON sightings(identifier);";
+		"CREATE INDEX IF NOT EXISTS idx_ident ON sightings(identifier);"
+		"CREATE TABLE IF NOT EXISTS speedtests ("
+		"  identifier TEXT PRIMARY KEY,"
+		"  ssid TEXT,"
+		"  down_mbps REAL, up_mbps REAL,"
+		"  ts REAL NOT NULL"
+		");";
 	char *errmsg = NULL;
 	if (sqlite3_exec(_db, ddl, NULL, NULL, &errmsg) != SQLITE_OK) {
 		NSLog(@"[AirLogger] db ddl failed: %s", errmsg);
@@ -265,7 +271,7 @@ static const double kMinMoveMeters = 10.0;
 	if (!_db) return;
 	dispatch_sync(_q, ^{
 		char *err = NULL;
-		sqlite3_exec(self->_db, "DELETE FROM sightings;", NULL, NULL, &err);
+		sqlite3_exec(self->_db, "DELETE FROM sightings; DELETE FROM speedtests;", NULL, NULL, &err);
 		if (err) sqlite3_free(err);
 		sqlite3_exec(self->_db, "VACUUM;", NULL, NULL, NULL);
 	});
@@ -299,6 +305,49 @@ static const double kMinMoveMeters = 10.0;
 				@"info": inf ? @(inf) : @"",
 				@"channel": ch ? @(ch) : @"",
 			}];
+		}
+		sqlite3_finalize(st);
+	});
+	return out;
+}
+
+- (void)recordSpeedTestForIdentifier:(NSString *)identifier ssid:(NSString *)ssid
+							down:(double)downMbps up:(double)upMbps {
+	if (!_db || identifier.length == 0) return;
+	NSString *ident = [identifier copy];
+	NSString *name = [ssid copy];
+	dispatch_async(_q, ^{
+		const char *sql = "INSERT OR REPLACE INTO speedtests (identifier,ssid,down_mbps,up_mbps,ts) VALUES (?,?,?,?,?);";
+		sqlite3_stmt *st = NULL;
+		if (sqlite3_prepare_v2(self->_db, sql, -1, &st, NULL) != SQLITE_OK) return;
+		sqlite3_bind_text(st, 1, ident.UTF8String, -1, SQLITE_TRANSIENT);
+		if (name) sqlite3_bind_text(st, 2, name.UTF8String, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(st, 2);
+		sqlite3_bind_double(st, 3, downMbps);
+		sqlite3_bind_double(st, 4, upMbps);
+		sqlite3_bind_double(st, 5, [[NSDate date] timeIntervalSince1970]);
+		sqlite3_step(st);
+		sqlite3_finalize(st);
+	});
+}
+
+- (NSDictionary *)speedTestForIdentifier:(NSString *)identifier {
+	if (!_db || identifier.length == 0) return nil;
+	__block NSDictionary *out = nil;
+	dispatch_sync(_q, ^{
+		const char *sql = "SELECT identifier, ssid, down_mbps, up_mbps, ts FROM speedtests WHERE identifier=?;";
+		sqlite3_stmt *st = NULL;
+		if (sqlite3_prepare_v2(self->_db, sql, -1, &st, NULL) != SQLITE_OK) return;
+		sqlite3_bind_text(st, 1, identifier.UTF8String, -1, SQLITE_TRANSIENT);
+		if (sqlite3_step(st) == SQLITE_ROW) {
+			const char *ident = (const char *)sqlite3_column_text(st, 0);
+			const char *ssid = (const char *)sqlite3_column_text(st, 1);
+			out = @{
+				@"identifier": ident ? @(ident) : @"",
+				@"ssid": ssid ? @(ssid) : @"",
+				@"down": @(sqlite3_column_double(st, 2)),
+				@"up": @(sqlite3_column_double(st, 3)),
+				@"ts": @(sqlite3_column_double(st, 4)),
+			};
 		}
 		sqlite3_finalize(st);
 	});

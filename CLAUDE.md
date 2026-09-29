@@ -47,6 +47,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   pointer where a `BOOL` is expected, so the callee reads an arbitrary value — `setPowered:@YES`
   was read as NO and switched Bluetooth off on resume. Use a typed call:
   `((void (*)(id, SEL, BOOL))objc_msgSend)(obj, sel, YES)` (see `ALBluetoothScanner.sendBool:`).
+- **`WiFiNetworkGetChannel` returns a `CFNumberRef`, not an `int`.** Reading it as `int`
+  stored the low bits of the object's address, so every Wi-Fi channel/band logged before
+  the fix is garbage (e.g. `-1303352152`). Read `WiFiNetworkGetProperty(net, "CHANNEL")`
+  as a CFNumber. Any `WiFiNetworkGet*` with a surprising value: suspect a CF return type.
 - **BLE (CoreBluetooth) does NOT work.** Even authorized (`CBManagerAuthorization=3`,
   powered on, scanning), `bluetoothd` never delivers `didDiscoverPeripheral` to this
   ad-hoc-signed app. The code path exists but yields nothing. Don't burn time re-trying;
@@ -75,6 +79,9 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
     NOT `{{LAT}}` mustache tokens — an HTML/JS formatter rewrites `{{ }}` into `{ }` object
     literals, which is a parse error that kills the whole script (updateData undefined).
     ALMapViewController.loadPage does the string replacement before loadHTMLString.
+- **Current list reloads every 1s**, which would snap an open swipe action shut. Swipe
+  state is tracked via `willBeginEditingRowAtIndexPath` / `didEndEditingRowAtIndexPath`
+  (`swipeOpen`) and `rebuildAndReload` skips while it's set — keep that if adding actions.
 - **Resources are copied to the bundle root.** `Resources/Info.plist` → `.app/Info.plist`,
   `Resources/map.html` → `.app/map.html` (found via `pathForResource:@"map"`).
 - **Never tear down scanners while running.** Pausing must keep the `ALWiFiScanner` /
@@ -100,7 +107,7 @@ use `class_copyMethodList` / `class_copyPropertyList` at runtime and read each v
   `BSSID`, `SSID_STR`, `RSSI`, `CHANNEL`, `CHANNEL_FLAGS`, `CAPABILITIES`, `AGE`, `NOISE`
   (→ SNR), `BEACON_INT`, `AP_MODE`, `RATES`, `IE`, `80211D_IE` (country code). Security via
   `WiFiNetworkIsWEP/IsWPA/IsSAE`(WPA3)`/IsEAP`(enterprise)`/IsWAPI/IsHidden`; band from the
-  channel number (1-14 = 2.4 GHz, else 5/6 GHz) or `WiFiNetworkGetOperatingBand`.
+  channel number (1-14 = 2.4 GHz, else 5 GHz; the iPhone 7 radio can't see 6 GHz) or `WiFiNetworkGetOperatingBand`.
 - **Bluetooth** (`BluetoothDevice` methods): `name`, `address`, `RSSI`, `majorClass`/
   `minorClass` (+`majorClassName`/`minorClassName`), `connected`, `paired`, `batteryLevel`
   (+`supportsBatteryLevel`), `vendorId`, `productId`, `productName`, `isAppleAudioDevice`,
@@ -112,24 +119,40 @@ use `class_copyMethodList` / `class_copyPropertyList` at runtime and read each v
 ```
 main.m                  entry point
 ALAppDelegate           UITabBarController: Current (live) / All (history) / Map tabs
-ALWiFiScanner           Wi-Fi via MobileWiFi (dlopen); async scan every ~6s
+ALWiFiScanner           Wi-Fi via MobileWiFi (dlopen); async scan every ~6s; currentNetwork
+                        (WiFiDeviceClientCopyCurrentNetwork) parsed like scan results
 ALBluetoothScanner      Classic BT via BluetoothManager; CoreBluetooth (BLE) scaffold
 ALLocationProvider      Core Location singleton; background updates enabled
 ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlogger.sqlite;
-                        bestLocationsPerDevice / geotaggedObservations / allDevices / wipe
+                        bestLocationsPerDevice / geotaggedObservations / allDevices / wipe;
+                        speedtests table (record/speedTestForIdentifier)
 ALDevice                unified device model (type, id, name, rssi, info, children)
 ALDeviceCell            custom list cell (type icon + signal pill)
 ALRootViewController    "Current" tab: live scan list; Live (last 30s, kLiveWindow) /
                         Session toggle; SSID grouping; BLE section hidden via
-                        kDisplaySections (shows Wi-Fi + Classic only)
+                        kDisplaySections (shows Wi-Fi + Classic only); header has a
+                        "Connected Wi-Fi" card (refreshed every 5s) with Speed Test button
 ALHistoryViewController "All" tab: full DB history via allDevices; UISearchController with
                         text search + scope bar (All / Wi-Fi / BT); title tracks scope;
                         trash = wipe DB
-ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi)
+ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi,
+                        and a Speed Test section: latest across the group's APs)
+ALWiFiJoin              open-network helpers: isOpen (Security == "Open"; groups need all
+                        APs open) / canJoin (+ named, not hidden) / join via
+                        NEHotspotConfiguration (iOS shows its own prompt), result verified
+                        with NEHotspotNetwork fetchCurrent after 3s. Used by the cell's
+                        green lock.open badge, the detail page's "Join Network" row, and
+                        the Current list's trailing "Join" swipe action
+ALSpeedTest             download then upload vs speed.cloudflare.com (__down / __up, no
+                        key); each phase time-boxed at 8s, Mbps measured from first byte;
+                        allowsCellularAccess = NO so it always measures Wi-Fi
+                        (__down caps at <100,000,000 bytes — larger returns HTTP 403;
+                        non-2xx responses fail the test rather than scoring ~0 Mbps)
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s
 ALLog.h                 file logger (no `log` CLI on iOS)
-entitlements.plist      wifi.* + bluetooth.access/internal/system
+entitlements.plist      wifi.* + bluetooth.access/internal/system +
+                        com.apple.developer.networking.HotspotConfiguration (joining)
 ```
 
 ## Data & estimation
@@ -149,6 +172,11 @@ entitlements.plist      wifi.* + bluetooth.access/internal/system
     = accurate). Bluetooth keeps its newest (devices move with people).
   - `open` applies the cap/collapse once to pre-existing data (`trimAll`).
   - Consequence: `cnt` in `allDevices` means "places seen", not raw sightings.
+- **Speed tests** (`speedtests`): `identifier (BSSID, PK), ssid, down_mbps, up_mbps, ts` —
+  latest result per AP only (`INSERT OR REPLACE`). Wiped along with sightings. While a test
+  runs, Wi-Fi scanning is held (`[wifi stop]`) because off-channel scans drag throughput
+  down; it resumes on completion if the app is in scanning mode. A successful test also logs
+  the AP as a sighting (only if its RSSI is < 0 — a 0 dBm row would skew the map estimate).
 - **`type`** enum: 0 = Wi-Fi, 1 = BLE, 2 = Classic BT.
 - **Identifier** is the stable key: BSSID (Wi-Fi), UUID (BLE), MAC (classic). Wi-Fi is
   grouped by SSID in the list only; the map keeps one pin per BSSID.

@@ -3,7 +3,8 @@
 //
 //  "Current" tab. Owns the scanners, ingests live sightings into an in-memory
 //  store (and the database), and shows them grouped by radio type with SSID
-//  grouping. Has a Live (last 30s) / Session toggle; BLE is hidden.
+//  grouping. Has a Live (last 30s) / Session toggle; BLE is hidden. A second
+//  header card shows the connected Wi-Fi network and runs speed tests on it.
 //
 
 #import "ALRootViewController.h"
@@ -14,6 +15,8 @@
 #import "ALBluetoothScanner.h"
 #import "ALDatabase.h"
 #import "ALLocationProvider.h"
+#import "ALSpeedTest.h"
+#import "ALWiFiJoin.h"
 
 // "Live" mode shows only devices seen within this window (longer than the ~6s
 // Wi-Fi scan cycle so present APs don't flicker out); "Session" shows all found.
@@ -24,6 +27,9 @@ static const NSTimeInterval kLiveWindow = 30.0;
 // self.sections, which is stored by ALDeviceType (wifi=0, ble=1, classic=2).
 static const ALDeviceType kDisplaySections[] = { ALDeviceTypeWiFi, ALDeviceTypeClassicBT };
 static const NSInteger kDisplaySectionCount = 2;
+
+static const CGFloat kHeaderHeight = 252; // summary card + connected Wi-Fi card
+static const NSTimeInterval kConnectionRefresh = 5.0;
 
 @interface ALRootViewController ()
 @property (nonatomic, strong) ALWiFiScanner *wifi;
@@ -42,6 +48,16 @@ static const NSInteger kDisplaySectionCount = 2;
 @property (nonatomic, strong) UILabel *statusPillLabel;
 @property (nonatomic, strong) UISegmentedControl *modeControl;
 @property (nonatomic) NSInteger mode; // 0 = Live (recent), 1 = Session (all found)
+
+// connected Wi-Fi card
+@property (nonatomic, strong) ALDevice *connected; // nil when not on Wi-Fi
+@property (nonatomic, strong) UILabel *connSSIDLabel;
+@property (nonatomic, strong) UILabel *connDetailLabel;
+@property (nonatomic, strong) UILabel *connSpeedLabel;
+@property (nonatomic, strong) UIButton *speedButton;
+@property (nonatomic, strong) NSTimer *connTimer;
+@property (nonatomic, strong) ALSpeedTest *speedTest;
+@property (nonatomic) BOOL swipeOpen; // a row's swipe actions are showing
 @end
 
 @implementation ALRootViewController
@@ -74,13 +90,34 @@ static const NSInteger kDisplaySectionCount = 2;
 	[self buildSummaryHeader];
 	[[ALLocationProvider shared] start];
 
+	// Create the Wi-Fi scanner up front (init doesn't scan) so the connected
+	// network can be shown while paused.
+	__weak typeof(self) weakSelf = self;
+	self.wifi = [[ALWiFiScanner alloc] init];
+	self.wifi.onDevice = ^(ALDevice *d) { [weakSelf ingest:d]; };
+
 	[self updateSummary];
+	[self refreshConnection];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshConnection)
+												 name:UIApplicationDidBecomeActiveNotification object:nil];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[self refreshConnection];
+	self.connTimer = [NSTimer scheduledTimerWithTimeInterval:kConnectionRefresh target:self
+													selector:@selector(refreshConnection) userInfo:nil repeats:YES];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[self.connTimer invalidate]; self.connTimer = nil;
 }
 
 - (void)viewDidLayoutSubviews {
 	[super viewDidLayoutSubviews];
 	if (self.summaryHeader) {
-		CGFloat h = 132;
+		CGFloat h = kHeaderHeight;
 		if (self.summaryHeader.frame.size.width != self.tableView.bounds.size.width ||
 			self.summaryHeader.frame.size.height != h) {
 			self.summaryHeader.frame = CGRectMake(0, 0, self.tableView.bounds.size.width, h);
@@ -92,7 +129,7 @@ static const NSInteger kDisplaySectionCount = 2;
 #pragma mark - Summary header
 
 - (void)buildSummaryHeader {
-	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 132)];
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, kHeaderHeight)];
 
 	UIView *card = [[UIView alloc] init];
 	card.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
@@ -145,7 +182,7 @@ static const NSInteger kDisplaySectionCount = 2;
 		[card.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
 		[card.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16],
 		[card.topAnchor constraintEqualToAnchor:header.topAnchor constant:4],
-		[card.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-8],
+		[card.heightAnchor constraintEqualToConstant:120],
 
 		[_totalLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
 		[_totalLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
@@ -169,8 +206,175 @@ static const NSInteger kDisplaySectionCount = 2;
 		[_modeControl.heightAnchor constraintEqualToConstant:30],
 	]];
 
+	UIView *conn = [self buildConnectionCard];
+	[header addSubview:conn];
+	[NSLayoutConstraint activateConstraints:@[
+		[conn.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
+		[conn.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
+		[conn.topAnchor constraintEqualToAnchor:card.bottomAnchor constant:10],
+		[conn.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-8],
+	]];
+
 	self.summaryHeader = header;
 	self.tableView.tableHeaderView = header;
+}
+
+#pragma mark - Connected Wi-Fi
+
+- (UIView *)buildConnectionCard {
+	UIView *card = [[UIView alloc] init];
+	card.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
+	card.layer.cornerRadius = 14;
+	card.layer.cornerCurve = kCACornerCurveContinuous;
+	card.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showConnectedDetail)]];
+
+	UILabel *caption = [[UILabel alloc] init];
+	caption.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+	caption.textColor = [UIColor secondaryLabelColor];
+	caption.text = @"CONNECTED WI-FI";
+	caption.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:caption];
+
+	_connSSIDLabel = [[UILabel alloc] init];
+	_connSSIDLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+	_connSSIDLabel.textColor = [UIColor labelColor];
+	_connSSIDLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:_connSSIDLabel];
+
+	_connDetailLabel = [[UILabel alloc] init];
+	_connDetailLabel.numberOfLines = 2;
+	_connDetailLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
+	_connDetailLabel.textColor = [UIColor secondaryLabelColor];
+	_connDetailLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:_connDetailLabel];
+
+	_connSpeedLabel = [[UILabel alloc] init];
+	_connSpeedLabel.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
+	_connSpeedLabel.textColor = [UIColor labelColor];
+	_connSpeedLabel.adjustsFontSizeToFitWidth = YES;
+	_connSpeedLabel.minimumScaleFactor = 0.8;
+	_connSpeedLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:_connSpeedLabel];
+
+	_speedButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	[_speedButton setTitle:@"Speed Test" forState:UIControlStateNormal];
+	_speedButton.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+	[_speedButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[_speedButton setTitleColor:[UIColor colorWithWhite:1 alpha:0.6] forState:UIControlStateDisabled];
+	_speedButton.backgroundColor = [UIColor systemBlueColor];
+	_speedButton.layer.cornerRadius = 15;
+	_speedButton.layer.cornerCurve = kCACornerCurveContinuous;
+	[_speedButton addTarget:self action:@selector(runSpeedTest) forControlEvents:UIControlEventTouchUpInside];
+	_speedButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:_speedButton];
+
+	[NSLayoutConstraint activateConstraints:@[
+		[caption.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
+		[caption.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
+
+		[_speedButton.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+		[_speedButton.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
+		[_speedButton.heightAnchor constraintEqualToConstant:30],
+		[_speedButton.widthAnchor constraintEqualToConstant:108],
+
+		[_connSSIDLabel.leadingAnchor constraintEqualToAnchor:caption.leadingAnchor],
+		[_connSSIDLabel.topAnchor constraintEqualToAnchor:caption.bottomAnchor constant:2],
+		[_connSSIDLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_speedButton.leadingAnchor constant:-10],
+
+		[_connDetailLabel.leadingAnchor constraintEqualToAnchor:caption.leadingAnchor],
+		[_connDetailLabel.topAnchor constraintEqualToAnchor:_connSSIDLabel.bottomAnchor constant:2],
+		[_connDetailLabel.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16],
+
+		[_connSpeedLabel.leadingAnchor constraintEqualToAnchor:caption.leadingAnchor],
+		[_connSpeedLabel.topAnchor constraintEqualToAnchor:_connDetailLabel.bottomAnchor constant:6],
+		[_connSpeedLabel.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16],
+	]];
+	return card;
+}
+
+- (void)refreshConnection {
+	if (!self.speedTest.running) self.connected = [self.wifi currentNetwork];
+	ALDevice *c = self.connected;
+
+	self.connSSIDLabel.text = c ? c.displayName : @"Not connected";
+	NSMutableArray *parts = [NSMutableArray array];
+	if (c) {
+		if (c.info[@"Band"]) [parts addObject:c.info[@"Band"]];
+		if (c.info[@"Channel"]) [parts addObject:[@"ch " stringByAppendingString:c.info[@"Channel"]]];
+		if (c.rssi < 0) [parts addObject:[NSString stringWithFormat:@"%ld dBm", (long)c.rssi]];
+	}
+	NSString *radio = [parts componentsJoinedByString:@" · "];
+	self.connDetailLabel.text = c ? (radio.length ? [NSString stringWithFormat:@"%@\n%@", c.identifier, radio] : c.identifier)
+		: @"Join a Wi-Fi network to run a speed test";
+
+	if (self.speedTest.running) return; // progress owns the speed label and button
+	self.speedButton.enabled = (c != nil);
+	self.speedButton.alpha = c ? 1.0 : 0.5;
+	[self showLastSpeedTest];
+}
+
+- (void)showLastSpeedTest {
+	NSDictionary *t = self.connected ? [[ALDatabase shared] speedTestForIdentifier:self.connected.identifier] : nil;
+	if (!t) {
+		self.connSpeedLabel.textColor = [UIColor tertiaryLabelColor];
+		self.connSpeedLabel.text = self.connected ? @"No speed test yet" : @"";
+		return;
+	}
+	NSRelativeDateTimeFormatter *rel = [[NSRelativeDateTimeFormatter alloc] init];
+	rel.unitsStyle = NSRelativeDateTimeFormatterUnitsStyleShort;
+	NSString *ago = [rel localizedStringForDate:[NSDate dateWithTimeIntervalSince1970:[t[@"ts"] doubleValue]]
+								 relativeToDate:[NSDate date]];
+	self.connSpeedLabel.textColor = [UIColor labelColor];
+	self.connSpeedLabel.text = [NSString stringWithFormat:@"↓ %.1f  ↑ %.1f Mbps  ·  %@",
+								[t[@"down"] doubleValue], [t[@"up"] doubleValue], ago];
+}
+
+- (void)showConnectedDetail {
+	if (!self.connected) return;
+	ALDetailViewController *vc = [[ALDetailViewController alloc] initWithDevice:self.connected];
+	[self.navigationController pushViewController:vc animated:YES];
+}
+
+- (void)runSpeedTest {
+	ALDevice *ap = [self.wifi currentNetwork];
+	if (!ap || self.speedTest.running) return;
+	self.connected = ap;
+
+	// Background Wi-Fi scans go off-channel and would drag throughput down, so
+	// hold them for the duration of the test.
+	[self.wifi stop];
+
+	self.speedButton.enabled = NO;
+	self.speedButton.alpha = 0.5;
+	self.connSpeedLabel.textColor = [UIColor secondaryLabelColor];
+	self.connSpeedLabel.text = @"Starting…";
+
+	if (!self.speedTest) self.speedTest = [[ALSpeedTest alloc] init];
+	__weak typeof(self) weakSelf = self;
+	self.speedTest.onProgress = ^(ALSpeedTestPhase phase, double mbps) {
+		weakSelf.connSpeedLabel.text = [NSString stringWithFormat:@"Testing %@…  %.1f Mbps",
+										phase == ALSpeedTestPhaseDownload ? @"download" : @"upload", mbps];
+	};
+	self.speedTest.onComplete = ^(double down, double up, NSError *error) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf) return;
+		if (strongSelf.scanning) [strongSelf.wifi start];
+		if (error) {
+			strongSelf.connSpeedLabel.textColor = [UIColor systemRedColor];
+			strongSelf.connSpeedLabel.text = [@"Speed test failed: " stringByAppendingString:error.localizedDescription];
+		} else {
+			[[ALDatabase shared] recordSpeedTestForIdentifier:ap.identifier ssid:ap.name down:down up:up];
+			// Log the AP as a sighting too, so it's in All Devices even if it hasn't
+			// been scanned yet. Skip if the RSSI is missing: a 0 dBm row would look
+			// like the strongest reading ever and skew the map estimate.
+			if (ap.rssi < 0) [[ALDatabase shared] recordDevice:ap location:[ALLocationProvider shared].currentLocation];
+		}
+		strongSelf.speedButton.enabled = YES;
+		strongSelf.speedButton.alpha = 1.0;
+		if (!error) [strongSelf refreshConnection];
+	};
+	[self.speedTest start];
 }
 
 - (void)modeChanged:(UISegmentedControl *)sender {
@@ -212,7 +416,7 @@ static const NSInteger kDisplaySectionCount = 2;
 	// Wi-Fi scan is in flight causes a use-after-free crash.
 	if (!self.wifi) { self.wifi = [[ALWiFiScanner alloc] init]; self.wifi.onDevice = sink; }
 	if (!self.bt)   { self.bt = [[ALBluetoothScanner alloc] init]; self.bt.onDevice = sink; }
-	[self.wifi start];
+	if (!self.speedTest.running) [self.wifi start]; // else resumed when the test finishes
 	[self.bt start];
 
 	self.uiTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
@@ -249,6 +453,8 @@ static const NSInteger kDisplaySectionCount = 2;
 }
 
 - (void)rebuildAndReload {
+	// reloadData would snap an open swipe action shut before it can be tapped.
+	if (self.swipeOpen) return;
 	NSTimeInterval now = [NSDate date].timeIntervalSince1970;
 	NSMutableArray *wifi = [NSMutableArray array];
 	NSMutableArray *ble = [NSMutableArray array];
@@ -359,6 +565,34 @@ static const NSInteger kDisplaySectionCount = 2;
 	ALDevice *d = items[ip.row];
 	ALDetailViewController *vc = [[ALDetailViewController alloc] initWithDevice:d];
 	[self.navigationController pushViewController:vc animated:YES];
+}
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
+	trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)ip {
+	NSArray *items = self.sections[kDisplaySections[ip.section]];
+	if (items.count == 0) return nil;
+	ALDevice *d = items[ip.row];
+	if (![ALWiFiJoin canJoin:d] || [d.name isEqualToString:self.connected.name]) return nil;
+	__weak typeof(self) weakSelf = self;
+	UIContextualAction *join = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"Join"
+		handler:^(UIContextualAction *action, UIView *view, void (^done)(BOOL)) {
+			[ALWiFiJoin join:d from:weakSelf];
+			done(YES);
+		}];
+	join.backgroundColor = [UIColor systemGreenColor];
+	join.image = [UIImage systemImageNamed:@"wifi"];
+	UISwipeActionsConfiguration *cfg = [UISwipeActionsConfiguration configurationWithActions:@[join]];
+	cfg.performsFirstActionWithFullSwipe = NO;
+	return cfg;
+}
+
+- (void)tableView:(UITableView *)tableView willBeginEditingRowAtIndexPath:(NSIndexPath *)ip {
+	self.swipeOpen = YES;
+}
+
+- (void)tableView:(UITableView *)tableView didEndEditingRowAtIndexPath:(NSIndexPath *)ip {
+	self.swipeOpen = NO;
+	[self rebuildAndReload];
 }
 
 #pragma mark - Section headers

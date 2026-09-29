@@ -8,4 +8,7 @@
 - (void)start;   // begins periodic scans
 - (void)stop;
 - (void)scanOnce;
+// The network we're currently associated with (nil if not connected). Parsed the
+// same way as scan results, so its identifier (BSSID) matches the database's.
+- (ALDevice *)currentNetwork;
 @end
