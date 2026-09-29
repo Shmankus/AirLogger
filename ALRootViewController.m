@@ -70,8 +70,11 @@ static const NSInteger kDisplaySectionCount = 2;
 		action:@selector(toggleScan)];
 
 
+	// on boot start location service but do not start scan yet
 	[self buildSummaryHeader];
-	[self startScan];
+	[[ALLocationProvider shared] start];
+
+	[self updateSummary];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -179,10 +182,14 @@ static const NSInteger kDisplaySectionCount = 2;
 	// Count reflects what's actually shown (mode-filtered, displayed sections only).
 	NSUInteger total = 0;
 	for (NSInteger i = 0; i < kDisplaySectionCount; i++) total += self.sections[kDisplaySections[i]].count;
+
+
 	self.totalLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)total];
-	NSString *gps = [ALLocationProvider shared].status ?: @"—";
+
+
+	
 	NSString *scope = (self.mode == 0) ? @"nearby now" : @"found this session";
-	self.totalCaption.text = [NSString stringWithFormat:@"%@  ·  GPS %@", scope, gps];
+	self.totalCaption.text = [NSString stringWithFormat:@"%@", scope];
 	self.statusDot.backgroundColor = self.scanning ? [UIColor systemGreenColor] : [UIColor systemGrayColor];
 	self.statusPillLabel.text = self.scanning ? @"Scanning" : @"Paused";
 }
@@ -195,8 +202,8 @@ static const NSInteger kDisplaySectionCount = 2;
 
 - (void)startScan {
 	self.scanning = YES;
-	self.navigationItem.rightBarButtonItem.image = [UIImage systemImageNamed:@"pause.fill"];
-	[[ALLocationProvider shared] start];
+	self.navigationItem.rightBarButtonItem.image = [UIImage systemImageNamed:@"play.fill"];
+	
 
 	__weak typeof(self) weakSelf = self;
 	void (^sink)(ALDevice *) = ^(ALDevice *d) { [weakSelf ingest:d]; };
@@ -218,7 +225,7 @@ static const NSInteger kDisplaySectionCount = 2;
 
 - (void)stopScan {
 	self.scanning = NO;
-	self.navigationItem.rightBarButtonItem.image = [UIImage systemImageNamed:@"play.fill"];
+	self.navigationItem.rightBarButtonItem.image = [UIImage systemImageNamed:@"pause.fill"];
 	[self.wifi stop];   // keep the objects alive; just stop scanning
 	[self.bt stop];
 	[self.uiTimer invalidate]; self.uiTimer = nil;
