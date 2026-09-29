@@ -38,12 +38,18 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   history with text search over name/BSSID and a Wi‑Fi/BLE/BT filter), and **Map**.
 - **SSID grouping** — access points that share a network name collapse into one row in
   the list, with every individual BSSID still available in the detail view.
-- **GPS‑tagged logging** — every sighting is written to a local **SQLite** database with
+- **GPS‑tagged logging** — sightings are written to a local **SQLite** database with
   a timestamp and location, so history persists across app updates and reinstalls.
+- **Bounded storage** — a device only gets a new row once you've moved ~10 m; while you
+  stay put its existing row is refreshed in place, so leaving the app running at a desk
+  doesn't pile up thousands of copies of your own network. Each device keeps at most 50
+  located readings: Wi‑Fi keeps its 10 newest plus its strongest (access points don't move,
+  and close readings are the most accurate), Bluetooth keeps its newest (devices travel).
 - **Position estimation** — each transmitter is placed on the map using an
   RSSI‑weighted centroid, upgraded to **least‑squares multilateration** when enough
   observations from different vantage points are available. Recent readings are weighted
-  more heavily so estimates converge as you move and track devices that relocate.
+  more heavily — over about a day for Wi‑Fi, minutes for Bluetooth — so estimates converge
+  as you move and track devices that relocate.
 - **Interactive dark map** — an OpenStreetMap slippy map (Leaflet) with color‑coded,
   tappable pins that update live and animate smoothly toward refined positions.
 - **Background operation** — keeps scanning and logging with the screen off via the
@@ -59,7 +65,7 @@ the OS that simply aren't present on this device.
 |---|---|
 | **Wi‑Fi scanning** | Apple removed the legacy `Apple80211*` C API; the current interface is the private `WiFiManagerClient` / `WiFiDeviceClient` family in `MobileWiFi.framework`. Symbols are discovered from the SDK's `.tbd` stub and resolved at runtime with `dlopen`/`dlsym`, so nothing is link‑time bound to a private framework. Scanning is async (`WiFiDeviceClientScanAsync`) with results parsed via `WiFiNetworkGetSSID/RSSI/Channel`. |
 | **Bluetooth** | The private `BluetoothManager` framework is driven for classic‑device discovery. Getting `bluetoothd` to deliver results to a sideloaded app required granting the privileged `com.apple.bluetooth.internal` / `com.apple.bluetooth.system` entitlements (embedded with `ldid`), which the jailbroken AMFI accepts. |
-| **Persistence** | The app's own sandbox container is not writable under its entitlement set, so the SQLite database lives at a writable system path (`/var/mobile/Library/AirLogger/`) — which also lets it survive reinstalls and be inspected over SSH. |
+| **Persistence** | The app's own sandbox container is not writable under its entitlement set, so the SQLite database lives at a writable system path (`/var/mobile/Library/AirLogger/`) — which also lets it survive reinstalls and be inspected over SSH. Growth is bounded per device: rows are added only after ~10 m of movement (stationary sightings update the latest row in place, with smoothed RSSI), and a per‑type eviction policy caps each device at 50 located rows. |
 | **Mapping** | `MKMapView` renders nothing on this device (the Maps app and its tile engine were removed, so MapKit never initializes a map session). The map is instead a `WKWebView` running **Leaflet**, pulling OSM tiles directly over HTTPS — bypassing MapKit entirely — and made dark with a CSS invert filter. Native code pushes fresh position estimates into the page via JavaScript, so pan/zoom and tiles are preserved between updates. |
 | **Location estimation** | Observations are projected into a local metric frame; the estimate is an RSSI‑weighted centroid, or a recency‑weighted least‑squares multilateration (solved via the normal equations) when the geometry supports it, bounded by a sanity cap. |
 

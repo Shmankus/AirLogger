@@ -3,13 +3,28 @@
 //
 //  SQLite store (singleton) for GPS-tagged sightings, at
 //  /var/mobile/Library/AirLogger/ (the app's sandbox container isn't writable,
-//  and this path survives reinstalls). Handles throttled inserts and the
+//  and this path survives reinstalls). Handles throttled, movement-gated writes
+//  with a per-device row cap (see the storage policy below), and the
 //  aggregate queries that back the map (best/observed locations) and the
 //  history list (allDevices), plus wipe.
 //
 
 #import "ALDatabase.h"
 #import <sqlite3.h>
+
+// Per-device storage policy:
+//  - A new geotagged row is only inserted once we've moved kMinMoveMeters (or the
+//    fix's accuracy radius, if worse) from that device's latest geotagged row.
+//    While stationary, that row is refreshed in place (ts/name/info, smoothed rssi),
+//    so sitting at a desk costs one row per device, not one every 5s.
+//  - Sightings without a fix collapse into a single row per device.
+//  - Cap of kMaxSightingsPerDevice geotagged rows per device. Wi-Fi APs rarely
+//    move, so they keep the kKeepRecentWiFi newest rows plus the strongest of the
+//    rest (strong = close = most accurate). Bluetooth devices move with people,
+//    so they simply keep the newest rows.
+static const int kMaxSightingsPerDevice = 50;
+static const int kKeepRecentWiFi = 10;
+static const double kMinMoveMeters = 10.0;
 
 @implementation ALDatabase {
 	sqlite3 *_db;
@@ -66,12 +81,62 @@
 		NSLog(@"[AirLogger] db ddl failed: %s", errmsg);
 		sqlite3_free(errmsg);
 	}
+	[self trimAll];
+}
+
+// Deletes geotagged rows beyond the cap, for one identifier (or all if nil).
+// Keep order per device: Wi-Fi keeps its kKeepRecentWiFi newest rows, then the
+// strongest of the rest; other types keep their newest. Call on _q (or in open).
+- (void)trimGeotagged:(NSString *)identifier {
+	char *sql = sqlite3_mprintf(
+		"DELETE FROM sightings WHERE id IN (SELECT id FROM ("
+		"  SELECT id, ROW_NUMBER() OVER (PARTITION BY identifier ORDER BY"
+		"    type = 0 AND rn_recent > %d, CASE WHEN type = 0 THEN rssi END DESC, rn_recent) rn_keep"
+		"  FROM (SELECT id, identifier, type, rssi,"
+		"    ROW_NUMBER() OVER (PARTITION BY identifier ORDER BY ts DESC, id DESC) rn_recent"
+		"    FROM sightings WHERE lat IS NOT NULL AND (%Q IS NULL OR identifier = %Q))"
+		") WHERE rn_keep > %d);",
+		kKeepRecentWiFi, identifier.UTF8String, identifier.UTF8String, kMaxSightingsPerDevice);
+	char *errmsg = NULL;
+	if (sqlite3_exec(_db, sql, NULL, NULL, &errmsg) != SQLITE_OK) {
+		NSLog(@"[AirLogger] db trim failed: %s", errmsg);
+		sqlite3_free(errmsg);
+	}
+	sqlite3_free(sql);
+}
+
+// One-time pass at open: enforce the policy on rows logged before it existed.
+- (void)trimAll {
+	[self trimGeotagged:nil];
+	// Fix-less sightings collapse to one row per device.
+	sqlite3_exec(_db,
+		"DELETE FROM sightings WHERE id IN ("
+		"  SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY identifier ORDER BY ts DESC, id DESC) rn"
+		"  FROM sightings WHERE lat IS NULL) WHERE rn > 1);", NULL, NULL, NULL);
+}
+
+// Latest row for identifier, geotagged or fix-less. Returns 0 if none. Call on _q.
+- (sqlite3_int64)latestRowFor:(NSString *)identifier geotagged:(BOOL)geo lat:(double *)lat lon:(double *)lon {
+	const char *sql = geo
+		? "SELECT id, lat, lon FROM sightings WHERE identifier=? AND lat IS NOT NULL ORDER BY ts DESC, id DESC LIMIT 1;"
+		: "SELECT id, 0, 0 FROM sightings WHERE identifier=? AND lat IS NULL ORDER BY ts DESC, id DESC LIMIT 1;";
+	sqlite3_stmt *st = NULL;
+	sqlite3_int64 rowid = 0;
+	if (sqlite3_prepare_v2(_db, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+	sqlite3_bind_text(st, 1, identifier.UTF8String, -1, SQLITE_TRANSIENT);
+	if (sqlite3_step(st) == SQLITE_ROW) {
+		rowid = sqlite3_column_int64(st, 0);
+		if (lat) *lat = sqlite3_column_double(st, 1);
+		if (lon) *lon = sqlite3_column_double(st, 2);
+	}
+	sqlite3_finalize(st);
+	return rowid;
 }
 
 - (void)recordDevice:(ALDevice *)d location:(CLLocation *)loc {
 	if (!_db || d.identifier.length == 0) return;
 
-	// Throttle: at most one row per identifier per 5s.
+	// Throttle: at most one write per identifier per 5s.
 	NSDate *last = _lastWrite[d.identifier];
 	if (last && [[NSDate date] timeIntervalSinceDate:last] < 5.0) return;
 	_lastWrite[d.identifier] = [NSDate date];
@@ -87,27 +152,58 @@
 		NSData *j = [NSJSONSerialization dataWithJSONObject:d.info options:0 error:nil];
 		if (j) infoJSON = [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding];
 	}
-	double lat = loc ? loc.coordinate.latitude : 0;
-	double lon = loc ? loc.coordinate.longitude : 0;
-	double acc = loc ? loc.horizontalAccuracy : -1;
 	BOOL hasLoc = (loc != nil && loc.horizontalAccuracy >= 0);
+	CLLocation *here = hasLoc ? [loc copy] : nil;
 
 	dispatch_async(_q, ^{
+		double now = [[NSDate date] timeIntervalSince1970];
+
+		// Stationary (or no fix): refresh the existing row instead of adding one.
+		double plat = 0, plon = 0;
+		sqlite3_int64 prev = [self latestRowFor:identifier geotagged:hasLoc lat:&plat lon:&plon];
+		BOOL moved = YES;
+		if (prev && hasLoc) {
+			CLLocation *anchor = [[CLLocation alloc] initWithLatitude:plat longitude:plon];
+			moved = [here distanceFromLocation:anchor] >= MAX(kMinMoveMeters, here.horizontalAccuracy);
+		}
+		if (prev && (!hasLoc || !moved)) {
+			// The anchor's lat/lon stay put so slow GPS drift can't creep without
+			// ever triggering an insert; rssi is smoothed rather than overwritten.
+			const char *sql = "UPDATE sightings SET ts=?, name=COALESCE(?, name), "
+							  "rssi=CAST(ROUND(COALESCE(rssi, ?3) * 0.7 + ?3 * 0.3) AS INTEGER), "
+							  "channel=COALESCE(?, channel), info=COALESCE(?, info) WHERE id=?;";
+			sqlite3_stmt *st = NULL;
+			if (sqlite3_prepare_v2(self->_db, sql, -1, &st, NULL) != SQLITE_OK) return;
+			sqlite3_bind_double(st, 1, now);
+			if (name) sqlite3_bind_text(st, 2, name.UTF8String, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(st, 2);
+			sqlite3_bind_int(st, 3, (int)rssi);
+			if (channel) sqlite3_bind_text(st, 4, channel.UTF8String, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(st, 4);
+			if (infoJSON) sqlite3_bind_text(st, 5, infoJSON.UTF8String, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(st, 5);
+			sqlite3_bind_int64(st, 6, prev);
+			sqlite3_step(st);
+			sqlite3_finalize(st);
+			return;
+		}
+
 		const char *sql = "INSERT INTO sightings (ts,type,identifier,name,rssi,channel,info,lat,lon,h_acc) "
 						  "VALUES (?,?,?,?,?,?,?,?,?,?);";
 		sqlite3_stmt *st = NULL;
 		if (sqlite3_prepare_v2(self->_db, sql, -1, &st, NULL) != SQLITE_OK) return;
-		sqlite3_bind_double(st, 1, [[NSDate date] timeIntervalSince1970]);
+		sqlite3_bind_double(st, 1, now);
 		sqlite3_bind_int(st, 2, (int)type);
 		sqlite3_bind_text(st, 3, identifier.UTF8String, -1, SQLITE_TRANSIENT);
 		if (name) sqlite3_bind_text(st, 4, name.UTF8String, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(st, 4);
 		sqlite3_bind_int(st, 5, (int)rssi);
 		if (channel) sqlite3_bind_text(st, 6, channel.UTF8String, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(st, 6);
 		if (infoJSON) sqlite3_bind_text(st, 7, infoJSON.UTF8String, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(st, 7);
-		if (hasLoc) { sqlite3_bind_double(st, 8, lat); sqlite3_bind_double(st, 9, lon); sqlite3_bind_double(st, 10, acc); }
-		else { sqlite3_bind_null(st, 8); sqlite3_bind_null(st, 9); sqlite3_bind_null(st, 10); }
+		if (hasLoc) {
+			sqlite3_bind_double(st, 8, here.coordinate.latitude);
+			sqlite3_bind_double(st, 9, here.coordinate.longitude);
+			sqlite3_bind_double(st, 10, here.horizontalAccuracy);
+		} else { sqlite3_bind_null(st, 8); sqlite3_bind_null(st, 9); sqlite3_bind_null(st, 10); }
 		sqlite3_step(st);
 		sqlite3_finalize(st);
+		if (hasLoc) [self trimGeotagged:identifier];
 	});
 }
 
