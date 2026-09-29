@@ -16,6 +16,7 @@
 #import "ALDatabase.h"
 #import "ALLocationProvider.h"
 #import "ALSpeedTest.h"
+#import "ALWiFiJoin.h"
 
 // "Live" mode shows only devices seen within this window (longer than the ~6s
 // Wi-Fi scan cycle so present APs don't flicker out); "Session" shows all found.
@@ -56,6 +57,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 @property (nonatomic, strong) UIButton *speedButton;
 @property (nonatomic, strong) NSTimer *connTimer;
 @property (nonatomic, strong) ALSpeedTest *speedTest;
+@property (nonatomic) BOOL swipeOpen; // a row's swipe actions are showing
 @end
 
 @implementation ALRootViewController
@@ -449,6 +451,8 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 }
 
 - (void)rebuildAndReload {
+	// reloadData would snap an open swipe action shut before it can be tapped.
+	if (self.swipeOpen) return;
 	NSTimeInterval now = [NSDate date].timeIntervalSince1970;
 	NSMutableArray *wifi = [NSMutableArray array];
 	NSMutableArray *ble = [NSMutableArray array];
@@ -559,6 +563,34 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	ALDevice *d = items[ip.row];
 	ALDetailViewController *vc = [[ALDetailViewController alloc] initWithDevice:d];
 	[self.navigationController pushViewController:vc animated:YES];
+}
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
+	trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)ip {
+	NSArray *items = self.sections[kDisplaySections[ip.section]];
+	if (items.count == 0) return nil;
+	ALDevice *d = items[ip.row];
+	if (![ALWiFiJoin canJoin:d] || [d.name isEqualToString:self.connected.name]) return nil;
+	__weak typeof(self) weakSelf = self;
+	UIContextualAction *join = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"Join"
+		handler:^(UIContextualAction *action, UIView *view, void (^done)(BOOL)) {
+			[ALWiFiJoin join:d from:weakSelf];
+			done(YES);
+		}];
+	join.backgroundColor = [UIColor systemGreenColor];
+	join.image = [UIImage systemImageNamed:@"wifi"];
+	UISwipeActionsConfiguration *cfg = [UISwipeActionsConfiguration configurationWithActions:@[join]];
+	cfg.performsFirstActionWithFullSwipe = NO;
+	return cfg;
+}
+
+- (void)tableView:(UITableView *)tableView willBeginEditingRowAtIndexPath:(NSIndexPath *)ip {
+	self.swipeOpen = YES;
+}
+
+- (void)tableView:(UITableView *)tableView didEndEditingRowAtIndexPath:(NSIndexPath *)ip {
+	self.swipeOpen = NO;
+	[self rebuildAndReload];
 }
 
 #pragma mark - Section headers

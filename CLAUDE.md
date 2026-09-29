@@ -47,6 +47,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   pointer where a `BOOL` is expected, so the callee reads an arbitrary value — `setPowered:@YES`
   was read as NO and switched Bluetooth off on resume. Use a typed call:
   `((void (*)(id, SEL, BOOL))objc_msgSend)(obj, sel, YES)` (see `ALBluetoothScanner.sendBool:`).
+- **`WiFiNetworkGetChannel` returns a `CFNumberRef`, not an `int`.** Reading it as `int`
+  stored the low bits of the object's address, so every Wi-Fi channel/band logged before
+  the fix is garbage (e.g. `-1303352152`). Read `WiFiNetworkGetProperty(net, "CHANNEL")`
+  as a CFNumber. Any `WiFiNetworkGet*` with a surprising value: suspect a CF return type.
 - **BLE (CoreBluetooth) does NOT work.** Even authorized (`CBManagerAuthorization=3`,
   powered on, scanning), `bluetoothd` never delivers `didDiscoverPeripheral` to this
   ad-hoc-signed app. The code path exists but yields nothing. Don't burn time re-trying;
@@ -75,6 +79,9 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
     NOT `{{LAT}}` mustache tokens — an HTML/JS formatter rewrites `{{ }}` into `{ }` object
     literals, which is a parse error that kills the whole script (updateData undefined).
     ALMapViewController.loadPage does the string replacement before loadHTMLString.
+- **Current list reloads every 1s**, which would snap an open swipe action shut. Swipe
+  state is tracked via `willBeginEditingRowAtIndexPath` / `didEndEditingRowAtIndexPath`
+  (`swipeOpen`) and `rebuildAndReload` skips while it's set — keep that if adding actions.
 - **Resources are copied to the bundle root.** `Resources/Info.plist` → `.app/Info.plist`,
   `Resources/map.html` → `.app/map.html` (found via `pathForResource:@"map"`).
 - **Never tear down scanners while running.** Pausing must keep the `ALWiFiScanner` /
@@ -100,7 +107,7 @@ use `class_copyMethodList` / `class_copyPropertyList` at runtime and read each v
   `BSSID`, `SSID_STR`, `RSSI`, `CHANNEL`, `CHANNEL_FLAGS`, `CAPABILITIES`, `AGE`, `NOISE`
   (→ SNR), `BEACON_INT`, `AP_MODE`, `RATES`, `IE`, `80211D_IE` (country code). Security via
   `WiFiNetworkIsWEP/IsWPA/IsSAE`(WPA3)`/IsEAP`(enterprise)`/IsWAPI/IsHidden`; band from the
-  channel number (1-14 = 2.4 GHz, else 5/6 GHz) or `WiFiNetworkGetOperatingBand`.
+  channel number (1-14 = 2.4 GHz, else 5 GHz; the iPhone 7 radio can't see 6 GHz) or `WiFiNetworkGetOperatingBand`.
 - **Bluetooth** (`BluetoothDevice` methods): `name`, `address`, `RSSI`, `majorClass`/
   `minorClass` (+`majorClassName`/`minorClassName`), `connected`, `paired`, `batteryLevel`
   (+`supportsBatteryLevel`), `vendorId`, `productId`, `productName`, `isAppleAudioDevice`,
@@ -130,6 +137,12 @@ ALHistoryViewController "All" tab: full DB history via allDevices; UISearchContr
                         trash = wipe DB
 ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi,
                         and a Speed Test section: latest across the group's APs)
+ALWiFiJoin              open-network helpers: isOpen (Security == "Open"; groups need all
+                        APs open) / canJoin (+ named, not hidden) / join via
+                        NEHotspotConfiguration (iOS shows its own prompt), result verified
+                        with NEHotspotNetwork fetchCurrent after 3s. Used by the cell's
+                        green lock.open badge, the detail page's "Join Network" row, and
+                        the Current list's trailing "Join" swipe action
 ALSpeedTest             download then upload vs speed.cloudflare.com (__down / __up, no
                         key); each phase time-boxed at 8s, Mbps measured from first byte;
                         allowsCellularAccess = NO so it always measures Wi-Fi
@@ -138,7 +151,8 @@ ALSpeedTest             download then upload vs speed.cloudflare.com (__down / _
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s
 ALLog.h                 file logger (no `log` CLI on iOS)
-entitlements.plist      wifi.* + bluetooth.access/internal/system
+entitlements.plist      wifi.* + bluetooth.access/internal/system +
+                        com.apple.developer.networking.HotspotConfiguration (joining)
 ```
 
 ## Data & estimation

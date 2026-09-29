@@ -23,7 +23,7 @@ typedef void          (*WiFiScanCallback)(WiFiDeviceClientRef, CFArrayRef, int, 
 typedef void          (*WiFiDeviceClientScanAsync_f)(WiFiDeviceClientRef, CFDictionaryRef, WiFiScanCallback, void *);
 typedef CFStringRef   (*WiFiNetworkGetSSID_f)(WiFiNetworkRef);
 typedef int           (*WiFiNetworkGetRSSI_f)(WiFiNetworkRef);
-typedef int           (*WiFiNetworkGetChannel_f)(WiFiNetworkRef);
+typedef CFNumberRef   (*WiFiNetworkGetChannel_f)(WiFiNetworkRef); // a CFNumber, NOT an int
 typedef CFTypeRef     (*WiFiNetworkGetProperty_f)(WiFiNetworkRef, CFStringRef);
 typedef CFDataRef     (*WiFiNetworkCopyBSSIDData_f)(WiFiNetworkRef);
 typedef bool          (*WiFiNetworkBool_f)(WiFiNetworkRef);
@@ -195,11 +195,17 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 	if (_getRSSI) dev.rssi = _getRSSI(net);
 	dev.info[@"BSSID"] = bssid;
 
-	int channel = _getChannel ? _getChannel(net) : 0;
-	if (channel) {
+	// The channel comes back as a CFNumber. It used to be read as a plain int,
+	// which stored the object's address and made every channel and band garbage.
+	int channel = 0;
+	CFTypeRef ch = _getProperty ? _getProperty(net, CFSTR("CHANNEL")) : NULL;
+	if (!ch && _getChannel) ch = _getChannel(net);
+	if (ch && CFGetTypeID(ch) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)ch, kCFNumberIntType, &channel);
+	if (channel > 0) {
 		dev.info[@"Channel"] = [NSString stringWithFormat:@"%d", channel];
-		// 2.4 GHz is channels 1-14; anything higher is 5 GHz (or 6 GHz very high).
-		dev.info[@"Band"] = (channel >= 32) ? (channel >= 233 ? @"6 GHz" : @"5 GHz") : @"2.4 GHz";
+		// 2.4 GHz is channels 1-14, anything higher is 5 GHz. (6 GHz reuses the same
+		// channel numbers, but this device's radio can't see 6 GHz anyway.)
+		dev.info[@"Band"] = (channel <= 14) ? @"2.4 GHz" : @"5 GHz";
 	}
 
 	// Security type from the dedicated MobileWiFi predicates.

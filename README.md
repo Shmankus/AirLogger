@@ -55,6 +55,9 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   download and upload over Wi‑Fi only (Cloudflare's public speed‑test endpoints, ~8 s per
   direction), and the latest result is saved with that access point and shown on its
   detail page in All Devices.
+- **Join open networks** — passwordless Wi‑Fi gets a green unlocked‑padlock badge in the
+  lists; swipe an open network in the Current tab (or tap **Join Network** on its detail
+  page) to join it via `NEHotspotConfiguration`, with iOS's own confirmation prompt.
 - **Interactive dark map** — an OpenStreetMap slippy map (Leaflet) with color‑coded,
   tappable pins that update live and animate smoothly toward refined positions.
 - **Background operation** — keeps scanning and logging with the screen off via the
@@ -113,6 +116,7 @@ ALRootViewController    "Current" tab — live device list, grouped by radio typ
 ALHistoryViewController "All" tab — full stored history with search + type filter
 ALDetailViewController  Per-device field breakdown (incl. last speed test for Wi-Fi)
 ALSpeedTest             Wi-Fi download/upload throughput test (Cloudflare endpoints)
+ALWiFiJoin              Open-network detection + joining via NEHotspotConfiguration
 ALMapViewController     "Map" tab — WKWebView + Leaflet map, position estimation
 Resources/map.html      The Leaflet map page (edit freely; data arrives via updateData())
 ```

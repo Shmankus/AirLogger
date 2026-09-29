@@ -3,16 +3,18 @@
 //
 //  Per-device detail screen. Shows a header (icon, name, type, signal) and
 //  grouped field sections: Identity, Signal, Speed Test (Wi-Fi, if one was run),
-//  Access Points (for grouped Wi-Fi), Advertisement, and Timing.
+//  Access Points (for grouped Wi-Fi), Advertisement, and Timing. Open Wi-Fi
+//  networks get a "Join Network" button at the top.
 //
 
 #import "ALDetailViewController.h"
 #import "ALDeviceCell.h"
 #import "ALDatabase.h"
+#import "ALWiFiJoin.h"
 
 @interface ALDetailViewController ()
 @property (nonatomic, strong) ALDevice *device;
-@property (nonatomic, strong) NSArray<NSDictionary *> *groups; // @{title, rows:[[k,v]]}
+@property (nonatomic, strong) NSArray<NSDictionary *> *groups; // @{title, rows:[[k,v]], action?}
 @end
 
 @implementation ALDetailViewController
@@ -85,6 +87,11 @@
 	[timing addObject:@[@"Last seen", [df stringFromDate:self.device.lastSeen]]];
 
 	NSMutableArray *groups = [NSMutableArray array];
+	if ([ALWiFiJoin canJoin:self.device])
+		[groups addObject:@{@"title": @"", @"rows": @[@[@"Join Network", @""]], @"action": @YES}];
+	else if ([ALWiFiJoin isOpen:self.device])
+		[groups addObject:@{@"title": @"Open network", @"rows":
+			@[@[@"Can't join", @"Hidden network (no name to join by)"]]}];
 	[groups addObject:@{@"title": @"Identity", @"rows": identity}];
 	[groups addObject:@{@"title": @"Signal", @"rows": signal}];
 	if (speed.count) [groups addObject:@{@"title": @"Speed Test", @"rows": speed}];
@@ -178,8 +185,16 @@
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
-	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
 	NSArray *row = self.groups[ip.section][@"rows"][ip.row];
+	if ([self.groups[ip.section][@"action"] boolValue]) {
+		UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+		cell.textLabel.text = row[0];
+		cell.textLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+		cell.textLabel.textColor = [UIColor systemBlueColor];
+		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		return cell;
+	}
+	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
 	cell.textLabel.text = row[0];
 	cell.textLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
 	cell.detailTextLabel.text = row[1];
@@ -188,6 +203,11 @@
 	cell.detailTextLabel.numberOfLines = 0;
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	return cell;
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+	[tv deselectRowAtIndexPath:ip animated:YES];
+	if ([self.groups[ip.section][@"action"] boolValue]) [ALWiFiJoin join:self.device from:self];
 }
 
 @end

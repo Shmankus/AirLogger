@@ -3,15 +3,18 @@
 //
 //  Custom table cell for a device row: colored type-icon badge, name, monospaced
 //  identifier, a meta line, and a color-coded RSSI pill with sighting count.
+//  Open (passwordless) Wi-Fi gets a green unlocked-padlock next to its name.
 //  Also vends the shared type/RSSI color helpers used across the UI and map.
 //
 
 #import "ALDeviceCell.h"
+#import "ALWiFiJoin.h"
 
 @interface ALDeviceCell ()
 @property (nonatomic, strong) UIView *iconBadge;
 @property (nonatomic, strong) UIImageView *iconView;
 @property (nonatomic, strong) UILabel *nameLabel;
+@property (nonatomic, strong) UIImageView *openIcon;
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) UILabel *metaLabel;
 @property (nonatomic, strong) UIView *rssiPill;
@@ -41,6 +44,12 @@
 		_nameLabel.textColor = [UIColor labelColor];
 		_nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
 		[_nameLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+
+		_openIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"lock.open.fill"
+			withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold]]];
+		_openIcon.tintColor = [UIColor systemGreenColor];
+		_openIcon.translatesAutoresizingMaskIntoConstraints = NO;
+		[_openIcon setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
 		_subtitleLabel = [[UILabel alloc] init];
 		_subtitleLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
@@ -74,6 +83,7 @@
 		UIView *c = self.contentView;
 		[c addSubview:_iconBadge];
 		[c addSubview:_nameLabel];
+		[c addSubview:_openIcon];
 		[c addSubview:_subtitleLabel];
 		[c addSubview:_metaLabel];
 		[c addSubview:_rssiPill];
@@ -92,6 +102,9 @@
 			[_nameLabel.leadingAnchor constraintEqualToAnchor:_iconBadge.trailingAnchor constant:12],
 			[_nameLabel.topAnchor constraintEqualToAnchor:c.topAnchor constant:10],
 			[_nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_rssiPill.leadingAnchor constant:-10],
+			[_openIcon.leadingAnchor constraintEqualToAnchor:_nameLabel.trailingAnchor constant:5],
+			[_openIcon.centerYAnchor constraintEqualToAnchor:_nameLabel.centerYAnchor],
+			[_openIcon.trailingAnchor constraintLessThanOrEqualToAnchor:_rssiPill.leadingAnchor constant:-10],
 
 			[_subtitleLabel.leadingAnchor constraintEqualToAnchor:_nameLabel.leadingAnchor],
 			[_subtitleLabel.topAnchor constraintEqualToAnchor:_nameLabel.bottomAnchor constant:2],
@@ -149,6 +162,7 @@
 	self.iconView.image = [UIImage systemImageNamed:[ALDeviceCell symbolForType:d.type] withConfiguration:cfg];
 
 	self.nameLabel.text = d.displayName;
+	self.openIcon.hidden = ![ALWiFiJoin isOpen:d];
 	self.subtitleLabel.text = d.identifier;
 
 	NSMutableArray *meta = [NSMutableArray array];
