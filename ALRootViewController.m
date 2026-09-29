@@ -2,9 +2,10 @@
 //  ALRootViewController.m — AirLogger
 //
 //  "Current" tab. Owns the scanners, ingests live sightings into an in-memory
-//  store (and the database), and shows them grouped by radio type with SSID
-//  grouping. Has a Live (last 30s) / Session toggle; BLE is hidden. A second
-//  header card shows the connected Wi-Fi network and runs speed tests on it.
+//  store (and the database), and shows one radio type at a time (Wi-Fi / BLE /
+//  Classic picker, with per-type counts) with SSID grouping. Has a Live (last
+//  30s) / Session toggle. A second header card shows the connected Wi-Fi network
+//  and runs speed tests on it.
 //
 
 #import "ALRootViewController.h"
@@ -22,13 +23,13 @@
 // Wi-Fi scan cycle so present APs don't flicker out); "Session" shows all found.
 static const NSTimeInterval kLiveWindow = 30.0;
 
-// Sections shown in the Current list. BLE is hidden because CoreBluetooth scanning
-// is blocked for this sideloaded app, so it never populates. These index into
-// self.sections, which is stored by ALDeviceType (wifi=0, ble=1, classic=2).
-static const ALDeviceType kDisplaySections[] = { ALDeviceTypeWiFi, ALDeviceTypeClassicBT };
-static const NSInteger kDisplaySectionCount = 2;
+// Type picker segments, in order. Segment index == ALDeviceType, which is also
+// how self.sections is indexed (wifi=0, ble=1, classic=2).
+static NSString *const kTypeSegmentTitles[] = { @"Wi-Fi", @"BLE", @"Classic" };
+static const NSInteger kTypeSegmentCount = 3;
 
-static const CGFloat kHeaderHeight = 252; // summary card + connected Wi-Fi card
+static const CGFloat kSummaryCardHeight = 164;
+static const CGFloat kHeaderHeight = 296; // summary card + connected Wi-Fi card
 static const NSTimeInterval kConnectionRefresh = 5.0;
 
 @interface ALRootViewController ()
@@ -48,6 +49,8 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 @property (nonatomic, strong) UILabel *statusPillLabel;
 @property (nonatomic, strong) UISegmentedControl *modeControl;
 @property (nonatomic) NSInteger mode; // 0 = Live (recent), 1 = Session (all found)
+@property (nonatomic, strong) UISegmentedControl *typeControl;
+@property (nonatomic) ALDeviceType shownType; // the one type listed below
 
 // connected Wi-Fi card
 @property (nonatomic, strong) ALDevice *connected; // nil when not on Wi-Fi
@@ -178,11 +181,19 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	_modeControl.translatesAutoresizingMaskIntoConstraints = NO;
 	[card addSubview:_modeControl];
 
+	NSMutableArray *typeTitles = [NSMutableArray array];
+	for (NSInteger i = 0; i < kTypeSegmentCount; i++) [typeTitles addObject:kTypeSegmentTitles[i]];
+	_typeControl = [[UISegmentedControl alloc] initWithItems:typeTitles];
+	_typeControl.selectedSegmentIndex = ALDeviceTypeWiFi;
+	[_typeControl addTarget:self action:@selector(typeChanged:) forControlEvents:UIControlEventValueChanged];
+	_typeControl.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:_typeControl];
+
 	[NSLayoutConstraint activateConstraints:@[
 		[card.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
 		[card.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16],
 		[card.topAnchor constraintEqualToAnchor:header.topAnchor constant:4],
-		[card.heightAnchor constraintEqualToConstant:120],
+		[card.heightAnchor constraintEqualToConstant:kSummaryCardHeight],
 
 		[_totalLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
 		[_totalLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
@@ -202,8 +213,13 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 		[_modeControl.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
 		[_modeControl.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-		[_modeControl.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14],
+		[_modeControl.bottomAnchor constraintEqualToAnchor:_typeControl.topAnchor constant:-10],
 		[_modeControl.heightAnchor constraintEqualToConstant:30],
+
+		[_typeControl.leadingAnchor constraintEqualToAnchor:_modeControl.leadingAnchor],
+		[_typeControl.trailingAnchor constraintEqualToAnchor:_modeControl.trailingAnchor],
+		[_typeControl.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14],
+		[_typeControl.heightAnchor constraintEqualToConstant:30],
 	]];
 
 	UIView *conn = [self buildConnectionCard];
@@ -382,16 +398,29 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	[self rebuildAndReload];
 }
 
+- (void)typeChanged:(UISegmentedControl *)sender {
+	self.shownType = (ALDeviceType)sender.selectedSegmentIndex;
+	[self rebuildAndReload];
+}
+
+- (NSArray<ALDevice *> *)shownItems {
+	return self.sections[self.shownType];
+}
+
 - (void)updateSummary {
-	// Count reflects what's actually shown (mode-filtered, displayed sections only).
+	// Counts reflect the current mode (Live/Session): total across every type, and
+	// each type's own count on its picker segment.
 	NSUInteger total = 0;
-	for (NSInteger i = 0; i < kDisplaySectionCount; i++) total += self.sections[kDisplaySections[i]].count;
-
-
+	for (NSInteger i = 0; i < kTypeSegmentCount; i++) {
+		NSUInteger n = self.sections[i].count;
+		total += n;
+		NSString *title = n ? [NSString stringWithFormat:@"%@ %lu", kTypeSegmentTitles[i], (unsigned long)n]
+							: kTypeSegmentTitles[i];
+		if (![[self.typeControl titleForSegmentAtIndex:i] isEqualToString:title])
+			[self.typeControl setTitle:title forSegmentAtIndex:i];
+	}
 	self.totalLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)total];
 
-
-	
 	NSString *scope = (self.mode == 0) ? @"nearby now" : @"found this session";
 	self.totalCaption.text = [NSString stringWithFormat:@"%@", scope];
 	self.statusDot.backgroundColor = self.scanning ? [UIColor systemGreenColor] : [UIColor systemGrayColor];
@@ -503,6 +532,9 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		group.sightings = total;
 		group.info[@"Access Points"] = [NSString stringWithFormat:@"%lu", (unsigned long)members.count];
 		if (channels.count) group.info[@"Channels"] = [channels.array componentsJoinedByString:@", "];
+		for (ALDevice *m in members) { // a mesh's APs share a vendor; take the first known
+			if (m.info[@"Manufacturer"]) { group.info[@"Manufacturer"] = m.info[@"Manufacturer"]; break; }
+		}
 		[wifiRows addObject:group];
 	}
 	[wifiRows sortUsingComparator:byRSSI];
@@ -527,15 +559,15 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 #pragma mark - Table
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return kDisplaySectionCount; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	NSUInteger n = self.sections[kDisplaySections[section]].count;
+	NSUInteger n = [self shownItems].count;
 	return n == 0 ? 1 : n; // one placeholder row when empty
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)ip {
-	NSArray *items = self.sections[kDisplaySections[ip.section]];
+	NSArray *items = [self shownItems];
 	if (items.count == 0) {
 		UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
 		cell.textLabel.text = self.scanning ? @"Scanning…" : @"No devices";
@@ -560,7 +592,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)ip {
 	[tableView deselectRowAtIndexPath:ip animated:YES];
-	NSArray *items = self.sections[kDisplaySections[ip.section]];
+	NSArray *items = [self shownItems];
 	if (items.count == 0) return;
 	ALDevice *d = items[ip.row];
 	ALDetailViewController *vc = [[ALDetailViewController alloc] initWithDevice:d];
@@ -569,7 +601,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 - (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
 	trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)ip {
-	NSArray *items = self.sections[kDisplaySections[ip.section]];
+	NSArray *items = [self shownItems];
 	if (items.count == 0) return nil;
 	ALDevice *d = items[ip.row];
 	if (![ALWiFiJoin canJoin:d] || [d.name isEqualToString:self.connected.name]) return nil;
@@ -600,7 +632,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section { return 46; }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
-	ALDeviceType t = kDisplaySections[section];
+	ALDeviceType t = self.shownType;
 	UIView *v = [[UIView alloc] init];
 
 	UIView *dot = [[UIView alloc] init];

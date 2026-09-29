@@ -9,6 +9,7 @@
 
 #import "ALWiFiScanner.h"
 #import "ALLog.h"
+#import "ALVendor.h"
 #import <dlfcn.h>
 
 // Modern MobileWiFi API (iOS 13+). The legacy Apple80211* C API is gone.
@@ -186,6 +187,9 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 			CFRelease(d);
 		}
 	}
+	// MobileWiFi's BSSID string drops leading zeros ("…:63:4"); pad it so one AP
+	// always gets the same identifier and the OUI lookup works.
+	if (bssid.length) bssid = [ALVendor normalizeMAC:bssid];
 	if (!bssid.length) bssid = ssid.length ? [@"ssid:" stringByAppendingString:ssid] : @"(unknown)";
 
 	ALDevice *dev = [[ALDevice alloc] init];
@@ -194,6 +198,9 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 	dev.name = ssid;
 	if (_getRSSI) dev.rssi = _getRSSI(net);
 	dev.info[@"BSSID"] = bssid;
+	NSString *vendor = [ALVendor vendorForMAC:bssid];
+	if (vendor) dev.info[@"Manufacturer"] = vendor;
+	else if ([ALVendor isRandomizedMAC:bssid]) dev.info[@"Manufacturer"] = @"Unknown (randomized address)";
 
 	// The channel comes back as a CFNumber. It used to be read as a plain int,
 	// which stored the object's address and made every channel and band garbage.

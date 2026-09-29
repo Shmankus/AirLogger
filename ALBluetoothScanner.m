@@ -2,13 +2,13 @@
 //  ALBluetoothScanner.m — AirLogger
 //
 //  Bluetooth scanner. Discovers classic Bluetooth devices via the private
-//  BluetoothManager framework (requires the privileged bluetooth.* entitlements).
-//  A CoreBluetooth BLE path exists but yields nothing — bluetoothd does not
-//  deliver advertisements to this sideloaded app.
+//  BluetoothManager framework (requires the privileged bluetooth.* entitlements),
+//  and BLE advertisements via CoreBluetooth using the privileged-daemon options.
 //
 
 #import "ALBluetoothScanner.h"
 #import "ALLog.h"
+#import "ALVendor.h"
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <dlfcn.h>
 #import <objc/message.h>
@@ -22,13 +22,34 @@
 
 @implementation ALBluetoothScanner
 
+// bluetoothd treats this ad-hoc-signed app's session as backgrounded (FG:0), and
+// a background scan with no service filter gets no results. Sessions flagged as a
+// privileged daemon (DMN:1) are exempt from that. The keys are private CoreBluetooth
+// exports, so resolve them at runtime.
+static NSString *ALCBKey(const char *sym) {
+	NSString *__unsafe_unretained *p = (NSString *__unsafe_unretained *)dlsym(RTLD_DEFAULT, sym);
+	return p ? *p : nil;
+}
+
+- (NSDictionary *)centralInitOptions {
+	NSString *k = ALCBKey("CBManagerIsPrivilegedDaemonKey");
+	ALLog(@"BLE: CBManagerIsPrivilegedDaemonKey = %@", k);
+	return k ? @{ k: @YES } : nil;
+}
+
+- (NSDictionary *)scanOptions {
+	NSMutableDictionary *o = [@{ CBCentralManagerScanOptionAllowDuplicatesKey: @YES } mutableCopy];
+	NSString *k = ALCBKey("CBCentralManagerScanOptionIsPrivilegedDaemonKey");
+	if (k) o[k] = @YES;
+	return o;
+}
+
 - (void)start {
 	// --- BLE via public CoreBluetooth --- (reuse the central across pause/resume)
 	if (!self.central) {
-		self.central = [[CBCentralManager alloc] initWithDelegate:self queue:nil options:nil];
+		self.central = [[CBCentralManager alloc] initWithDelegate:self queue:nil options:[self centralInitOptions]];
 	} else if (self.central.state == CBManagerStatePoweredOn && !self.central.isScanning) {
-		[self.central scanForPeripheralsWithServices:nil
-											 options:@{ CBCentralManagerScanOptionAllowDuplicatesKey : @YES }];
+		[self.central scanForPeripheralsWithServices:nil options:[self scanOptions]];
 	}
 
 	// Live heartbeat so the status reflects the real scan state, not just discoveries.
@@ -81,7 +102,8 @@
 	NSInteger auth = -1;
 	if (@available(iOS 13.0, *)) auth = (NSInteger)CBCentralManager.authorization;
 	if (central.state == CBManagerStatePoweredOn) {
-		NSDictionary *opts = @{ CBCentralManagerScanOptionAllowDuplicatesKey : @YES };
+		NSDictionary *opts = [self scanOptions];
+		ALLog(@"BLE: scan options %@", opts);
 		[central scanForPeripheralsWithServices:nil options:opts];
 		ALLog(@"BLE: scanForPeripherals started, isScanning=%d", central.isScanning);
 		self.bleStatus = [NSString stringWithFormat:@"scanning (auth=%ld)", (long)auth];
@@ -127,6 +149,8 @@
 			const uint8_t *b = mfg.bytes;
 			uint16_t companyID = b[0] | (b[1] << 8); // little-endian
 			d.info[@"Company ID"] = [NSString stringWithFormat:@"0x%04X", companyID];
+			NSString *company = [ALVendor companyNameForID:companyID];
+			if (company) d.info[@"Manufacturer"] = company;
 		}
 	}
 
@@ -206,6 +230,8 @@
 	if ([rssi respondsToSelector:@selector(integerValue)]) d.rssi = [rssi integerValue];
 
 	if (addr.length) d.info[@"Address"] = addr;
+	NSString *vendor = [ALVendor vendorForMAC:addr];
+	if (vendor) d.info[@"Manufacturer"] = vendor;
 	NSString *major = [self safeString:dev key:@"majorClassName"];
 	if (major.length) d.info[@"Major Class"] = major;
 	NSString *minor = [self safeString:dev key:@"minorClassName"];

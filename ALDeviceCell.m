@@ -169,14 +169,15 @@
 	if (d.children.count)      [meta addObject:[NSString stringWithFormat:@"%lu APs", (unsigned long)d.children.count]];
 	if (d.info[@"Channels"])   [meta addObject:[NSString stringWithFormat:@"ch %@", d.info[@"Channels"]]];
 	else if (d.info[@"Channel"]) [meta addObject:[NSString stringWithFormat:@"ch %@", d.info[@"Channel"]]];
-	if (d.info[@"Company ID"]) [meta addObject:d.info[@"Company ID"]];
+	if (d.info[@"Manufacturer"]) [meta addObject:d.info[@"Manufacturer"]];
+	else if (d.info[@"Company ID"]) [meta addObject:d.info[@"Company ID"]];
 	if (d.info[@"Connectable"])[meta addObject:[@"conn: " stringByAppendingString:d.info[@"Connectable"]]];
 	self.metaLabel.text = [meta componentsJoinedByString:@"  ·  "];
 	self.metaLabel.hidden = (meta.count == 0);
 
 	self.rssiPill.backgroundColor = [ALDeviceCell colorForRSSI:d.rssi];
 	self.rssiLabel.text = (d.rssi == 0) ? @"—" : [NSString stringWithFormat:@"%ld", (long)d.rssi];
-	self.sightingsLabel.text = [NSString stringWithFormat:@"×%lu", (unsigned long)d.sightings];
+	self.sightingsLabel.text = [d sightingsText];
 }
 
 @end

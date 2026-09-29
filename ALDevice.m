@@ -34,4 +34,10 @@
 	return @"(unnamed)";
 }
 
+- (NSString *)sightingsText {
+	unsigned long n = (unsigned long)_sightings;
+	if (!_fromHistory) return [NSString stringWithFormat:@"%lu heard", n];
+	return [NSString stringWithFormat:@"%lu %@", n, n == 1 ? @"place" : @"places"];
+}
+
 @end

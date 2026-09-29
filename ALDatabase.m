@@ -10,6 +10,8 @@
 //
 
 #import "ALDatabase.h"
+#import "ALVendor.h"
+#import "ALLog.h"
 #import <sqlite3.h>
 
 // Per-device storage policy:
@@ -87,7 +89,43 @@ static const double kMinMoveMeters = 10.0;
 		NSLog(@"[AirLogger] db ddl failed: %s", errmsg);
 		sqlite3_free(errmsg);
 	}
+	[self normalizeBSSIDs];
 	[self trimAll];
+}
+
+// Older builds stored BSSIDs as MobileWiFi formats them, without zero padding
+// ("…:63:4"). Rewrite them padded so they merge with new rows and match the OUI
+// table. Cheap once done: only mismatching identifiers are touched.
+- (void)normalizeBSSIDs {
+	NSMutableSet<NSString *> *ids = [NSMutableSet set];
+	const char *q = "SELECT DISTINCT identifier FROM sightings WHERE type = 0 "
+					"UNION SELECT identifier FROM speedtests;";
+	sqlite3_stmt *st = NULL;
+	if (sqlite3_prepare_v2(_db, q, -1, &st, NULL) != SQLITE_OK) return;
+	while (sqlite3_step(st) == SQLITE_ROW) {
+		const char *s = (const char *)sqlite3_column_text(st, 0);
+		if (s) [ids addObject:@(s)];
+	}
+	sqlite3_finalize(st);
+
+	NSUInteger fixed = 0;
+	for (NSString *old in ids) {
+		NSString *norm = [ALVendor normalizeMAC:old];
+		if ([norm isEqualToString:old]) continue;
+		const char *sqls[] = {
+			"UPDATE sightings SET identifier = ?1 WHERE identifier = ?2;",
+			"UPDATE OR REPLACE speedtests SET identifier = ?1 WHERE identifier = ?2;",
+		};
+		for (int i = 0; i < 2; i++) {
+			if (sqlite3_prepare_v2(_db, sqls[i], -1, &st, NULL) != SQLITE_OK) continue;
+			sqlite3_bind_text(st, 1, norm.UTF8String, -1, SQLITE_TRANSIENT);
+			sqlite3_bind_text(st, 2, old.UTF8String, -1, SQLITE_TRANSIENT);
+			sqlite3_step(st);
+			sqlite3_finalize(st);
+		}
+		fixed++;
+	}
+	if (fixed) ALLog(@"db: normalized %lu BSSID(s)", (unsigned long)fixed);
 }
 
 // Deletes geotagged rows beyond the cap, for one identifier (or all if nil).

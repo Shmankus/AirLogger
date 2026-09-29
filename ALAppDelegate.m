@@ -9,6 +9,7 @@
 #import "ALRootViewController.h"
 #import "ALHistoryViewController.h"
 #import "ALMapViewController.h"
+#import "ALVendor.h"
 
 @interface ALAppDelegate ()
 @property (nonatomic, strong) UITabBarController *tabs;
@@ -36,6 +37,7 @@
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)opts {
+	[ALVendor preload];
 	self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
 
 	ALRootViewController *root = [[ALRootViewController alloc] init];
