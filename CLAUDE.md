@@ -43,6 +43,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   scan results to a sideloaded app until it carries **`com.apple.bluetooth.internal`** and
   **`com.apple.bluetooth.system`** (plus `com.apple.bluetooth.access`). The jailbroken AMFI
   accepts arbitrary ldid entitlements. Classic Bluetooth (private `BluetoothManager`) then works.
+- **Never call private BOOL setters via `performSelector:withObject:`.** It passes an object
+  pointer where a `BOOL` is expected, so the callee reads an arbitrary value — `setPowered:@YES`
+  was read as NO and switched Bluetooth off on resume. Use a typed call:
+  `((void (*)(id, SEL, BOOL))objc_msgSend)(obj, sel, YES)` (see `ALBluetoothScanner.sendBool:`).
 - **BLE (CoreBluetooth) does NOT work.** Even authorized (`CBManagerAuthorization=3`,
   powered on, scanning), `bluetoothd` never delivers `didDiscoverPeripheral` to this
   ad-hoc-signed app. The code path exists but yields nothing. Don't burn time re-trying;
