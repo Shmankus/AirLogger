@@ -96,7 +96,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	// Create the Wi-Fi scanner up front (init doesn't scan) so the connected
 	// network can be shown while paused.
 	__weak typeof(self) weakSelf = self;
-	self.wifi = [[ALWiFiScanner alloc] init];
+	self.wifi = [ALWiFiScanner shared];
 	self.wifi.onDevice = ^(ALDevice *d) { [weakSelf ingest:d]; };
 
 	[self updateSummary];
@@ -443,7 +443,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 	// Create the scanners once and reuse them; tearing them down while an async
 	// Wi-Fi scan is in flight causes a use-after-free crash.
-	if (!self.wifi) { self.wifi = [[ALWiFiScanner alloc] init]; self.wifi.onDevice = sink; }
+	if (!self.wifi) { self.wifi = [ALWiFiScanner shared]; self.wifi.onDevice = sink; }
 	if (!self.bt)   { self.bt = [[ALBluetoothScanner alloc] init]; self.bt.onDevice = sink; }
 	if (!self.speedTest.running) [self.wifi start]; // else resumed when the test finishes
 	[self.bt start];

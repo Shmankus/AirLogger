@@ -64,6 +64,14 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
 - **MobileWiFi's `BSSID` string isn't zero-padded** (`18:90:88:9f:63:4`). `ALWiFiScanner`
   runs it through `ALVendor normalizeMAC:`; `ALDatabase normalizeBSSIDs` rewrites old rows
   (and speedtests) at open. Compare/store MACs only in normalized form.
+- **NEHotspotConfiguration fails with error 11 (`NEHotspotConfigurationErrorUnknown`,
+  "<unknown>")** for this app even with the HotspotConfiguration entitlement — likely the
+  same ad-hoc-signing identity problem as BLE. Joining uses MobileWiFi's private
+  `WiFiDeviceClientAssociateAsync` instead — **verified** joining a saved WPA network
+  (wifid applied the stored password to the scan-result network; callback came back
+  `(device, network, info=NULL, err=0, ctx)`). Joining via the saved record and leaving
+  via `WiFiDeviceClientDisassociate` (~1s, no auto-rejoin within 3s) are verified too.
+  Open-network joins use the same call but haven't been tested in the field yet.
 - **Classic Bluetooth has no RSSI.** `BluetoothDevice` has no `RSSI` method (KVC throws,
   `safeValue` returns nil), and MobileBluetooth has no `BTDeviceGetRSSI`; classic rows are
   always stored with rssi 0.
@@ -156,9 +164,20 @@ ALDetailViewController  per-device field breakdown (incl. per-AP list for groupe
                         "Show on Map" row if the device has a geotag (grouped Wi-Fi
                         uses its strongest geotagged AP, since pins are per BSSID)
 ALWiFiJoin              open-network helpers: isOpen (Security == "Open"; groups need all
-                        APs open) / canJoin (+ named, not hidden) / join via
-                        NEHotspotConfiguration (iOS shows its own prompt), result verified
-                        with NEHotspotNetwork fetchCurrent after 3s. Used by the cell's
+                        APs open) / canJoin (+ named, not hidden) / join: first
+                        MobileWiFi WiFiDeviceClientAssociateAsync on the strongest AP's
+                        network object from the last scan (ALWiFiScanner shared
+                        associateWithBSSIDs:, scans held 10s), else NEHotspotConfiguration;
+                        result verified by polling currentNetwork for 8s. Secured networks
+                        saved in Settings (WiFiManagerClientCopyNetworks, matched by SSID,
+                        cached 30s) are joinable too: scan-result association first (wifid
+                        should use the stored password), then the saved record itself; the
+                        cell shows a blue key for them. leave: WiFiDeviceClientDisassociate,
+                        then polls until off the SSID and re-checks 3s later (auto-join
+                        can pull a saved network straight back — reported as a failure);
+                        "already disconnected" if the phone wasn't on it. Posts
+                        ALWiFiJoinStateChangedNotification after every join/leave; the
+                        detail page rebuilds its Join / Disconnect row from it. Used by the cell's
                         green lock.open badge, the detail page's "Join Network" row, and
                         the Current list's trailing "Join" swipe action
 ALSpeedTest             download then upload vs speed.cloudflare.com (__down / __up, no

@@ -30,6 +30,16 @@ typedef CFTypeRef     (*WiFiNetworkGetProperty_f)(WiFiNetworkRef, CFStringRef);
 typedef CFDataRef     (*WiFiNetworkCopyBSSIDData_f)(WiFiNetworkRef);
 typedef bool          (*WiFiNetworkBool_f)(WiFiNetworkRef);
 typedef WiFiNetworkRef (*WiFiDeviceClientCopyCurrentNetwork_f)(WiFiDeviceClientRef);
+typedef void          (*WiFiAssociateCallback)(WiFiDeviceClientRef, WiFiNetworkRef, CFDictionaryRef, int, void *);
+typedef void          (*WiFiDeviceClientAssociateAsync_f)(WiFiDeviceClientRef, WiFiNetworkRef, WiFiAssociateCallback, void *);
+typedef CFArrayRef    (*WiFiManagerClientCopyNetworks_f)(WiFiManagerRef); // saved networks
+typedef void          (*WiFiDeviceClientDisassociate_f)(WiFiDeviceClientRef);
+
+static const NSTimeInterval kSavedRefresh = 30.0;
+
+// Hold periodic scans this long after starting a join; off-channel scans
+// during association can make it fail.
+static const NSTimeInterval kJoinScanHold = 10.0;
 
 @interface ALWiFiScanner ()
 - (void)handleResults:(NSArray *)networks error:(int)error;
@@ -40,6 +50,13 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 		ALWiFiScanner *self = (__bridge ALWiFiScanner *)token;
 		[self handleResults:(__bridge NSArray *)results error:error];
 	}
+}
+
+// The callback's signature is reverse-engineered, so it's only logged (context
+// is NULL, nothing is dereferenced); ALWiFiJoin verifies via currentNetwork.
+static void ALWiFiAssociateCallback(WiFiDeviceClientRef device, WiFiNetworkRef network,
+									CFDictionaryRef info, int error, void *ctx) {
+	ALLog(@"WiFi: associate callback network=%p info=%p err=%d", network, info, error);
 }
 
 @implementation ALWiFiScanner {
@@ -60,7 +77,24 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 	WiFiNetworkCopyBSSIDData_f              _copyBSSID;
 	WiFiDeviceClientCopyCurrentNetwork_f    _copyCurrent;
 	WiFiNetworkBool_f _isWEP, _isWPA, _isSAE, _isEAP, _isWAPI, _isHidden;
+	WiFiDeviceClientAssociateAsync_f        _associate;
+	WiFiManagerClientCopyNetworks_f         _copyNetworks;
+	WiFiDeviceClientDisassociate_f          _disassociate;
 	BOOL _stopped;
+
+	NSDictionary<NSString *, id> *_savedBySSID;  // SSID -> saved WiFiNetworkRef
+	NSDate *_savedLoadedAt;
+
+	NSDictionary<NSString *, id> *_lastNetworks; // BSSID -> WiFiNetworkRef from the last scan
+	id _joiningNetwork;                          // kept alive while an association runs
+	NSDate *_holdScansUntil;
+}
+
++ (instancetype)shared {
+	static ALWiFiScanner *s;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{ s = [[self alloc] init]; });
+	return s;
 }
 
 - (instancetype)init {
@@ -86,6 +120,9 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 		_isEAP       = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsEAP");
 		_isWAPI      = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsWAPI");
 		_isHidden    = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsHidden");
+		_associate   = (WiFiDeviceClientAssociateAsync_f) dlsym(_lib, "WiFiDeviceClientAssociateAsync");
+		_copyNetworks = (WiFiManagerClientCopyNetworks_f) dlsym(_lib, "WiFiManagerClientCopyNetworks");
+		_disassociate = (WiFiDeviceClientDisassociate_f)  dlsym(_lib, "WiFiDeviceClientDisassociate");
 
 		ALLog(@"WiFi: create=%p sched=%p copyDev=%p scan=%p getSSID=%p",
 			  _create, _schedule, _copyDevices, _scanAsync, _getSSID);
@@ -135,6 +172,7 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 
 - (void)scanOnce {
 	if (_stopped || !self.available) return;
+	if (_holdScansUntil && _holdScansUntil.timeIntervalSinceNow > 0) return; // joining
 	NSDictionary *opts = @{};
 	_scanAsync(_device, (__bridge CFDictionaryRef)opts, ALWiFiScanCallback, (__bridge void *)self);
 }
@@ -149,12 +187,75 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 	self.status = [NSString stringWithFormat:@"OK, %lu networks", (unsigned long)networks.count];
 	ALLog(@"WiFi: %lu networks", (unsigned long)networks.count);
 
+	NSMutableDictionary<NSString *, id> *byBSSID = [NSMutableDictionary dictionary];
 	for (id obj in networks) {
 		WiFiNetworkRef net = (__bridge WiFiNetworkRef)obj;
 		if (!net) continue;
 		ALDevice *dev = [self deviceFromNetwork:net];
+		byBSSID[dev.identifier] = obj; // retains the network for a later join
 		if (self.onDevice) self.onDevice(dev);
 	}
+	_lastNetworks = byBSSID;
+}
+
+- (BOOL)associateWithBSSIDs:(NSArray<NSString *> *)bssids {
+	if (!_associate || !_device) return NO;
+	id best = nil;
+	int bestRSSI = 0;
+	for (NSString *b in bssids) {
+		id net = _lastNetworks[b];
+		if (!net) continue;
+		int r = _getRSSI ? _getRSSI((__bridge WiFiNetworkRef)net) : 0;
+		if (!best || r > bestRSSI) { best = net; bestRSSI = r; }
+	}
+	if (!best) return NO;
+
+	_joiningNetwork = best;
+	_holdScansUntil = [NSDate dateWithTimeIntervalSinceNow:kJoinScanHold];
+	ALLog(@"WiFi: associating with %@ (rssi %d)",
+		  [self deviceFromNetwork:(__bridge WiFiNetworkRef)best].identifier, bestRSSI);
+	_associate(_device, (__bridge WiFiNetworkRef)best, ALWiFiAssociateCallback, NULL);
+	return YES;
+}
+
+#pragma mark - Saved networks
+
+- (NSDictionary<NSString *, id> *)savedNetworks {
+	if (_savedLoadedAt && -_savedLoadedAt.timeIntervalSinceNow < kSavedRefresh) return _savedBySSID;
+	_savedLoadedAt = [NSDate date];
+	if (!_copyNetworks || !_manager) return _savedBySSID;
+
+	CFArrayRef list = _copyNetworks(_manager);
+	NSMutableDictionary *bySSID = [NSMutableDictionary dictionary];
+	for (id obj in (__bridge NSArray *)list) {
+		CFStringRef s = _getSSID ? _getSSID((__bridge WiFiNetworkRef)obj) : NULL;
+		if (s && CFStringGetLength(s)) bySSID[(__bridge NSString *)s] = obj;
+	}
+	if (list) CFRelease(list);
+	if (!_savedBySSID) ALLog(@"WiFi: %lu saved network(s)", (unsigned long)bySSID.count);
+	_savedBySSID = bySSID;
+	return _savedBySSID;
+}
+
+- (BOOL)isSavedSSID:(NSString *)ssid {
+	return ssid.length && [self savedNetworks][ssid] != nil;
+}
+
+- (BOOL)associateWithSavedSSID:(NSString *)ssid {
+	id net = ssid.length ? [self savedNetworks][ssid] : nil;
+	if (!_associate || !_device || !net) return NO;
+	_joiningNetwork = net;
+	_holdScansUntil = [NSDate dateWithTimeIntervalSinceNow:kJoinScanHold];
+	ALLog(@"WiFi: associating with saved network '%@'", ssid);
+	_associate(_device, (__bridge WiFiNetworkRef)net, ALWiFiAssociateCallback, NULL);
+	return YES;
+}
+
+- (BOOL)disassociate {
+	if (!_disassociate || !_device) return NO;
+	ALLog(@"WiFi: disassociating");
+	_disassociate(_device);
+	return YES;
 }
 
 - (ALDevice *)currentNetwork {
