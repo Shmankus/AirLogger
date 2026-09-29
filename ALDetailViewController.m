@@ -11,10 +11,12 @@
 #import "ALDeviceCell.h"
 #import "ALDatabase.h"
 #import "ALWiFiJoin.h"
+#import "ALAppDelegate.h"
 
 @interface ALDetailViewController ()
 @property (nonatomic, strong) ALDevice *device;
 @property (nonatomic, strong) NSArray<NSDictionary *> *groups; // @{title, rows:[[k,v]], action?}
+@property (nonatomic, copy) NSString *mapIdentifier; // pin to show on the map (nil = no pin)
 @end
 
 @implementation ALDetailViewController
@@ -86,12 +88,26 @@
 	[timing addObject:@[@"First seen", [df stringFromDate:self.device.firstSeen]]];
 	[timing addObject:@[@"Last seen", [df stringFromDate:self.device.lastSeen]]];
 
+	// The map has one pin per BSSID; for a grouped network use its strongest
+	// AP that has one.
+	NSArray<ALDevice *> *candidates = grouped
+		? [self.device.children sortedArrayUsingComparator:^NSComparisonResult(ALDevice *a, ALDevice *b) {
+			NSInteger ra = a.rssi ?: -999, rb = b.rssi ?: -999;
+			return ra > rb ? NSOrderedAscending : (ra < rb ? NSOrderedDescending : NSOrderedSame);
+		}]
+		: @[self.device];
+	for (ALDevice *c in candidates) {
+		if ([[ALDatabase shared] hasGeotagForIdentifier:c.identifier]) { self.mapIdentifier = c.identifier; break; }
+	}
+
 	NSMutableArray *groups = [NSMutableArray array];
 	if ([ALWiFiJoin canJoin:self.device])
-		[groups addObject:@{@"title": @"", @"rows": @[@[@"Join Network", @""]], @"action": @YES}];
+		[groups addObject:@{@"title": @"", @"rows": @[@[@"Join Network", @""]], @"action": @"join"}];
 	else if ([ALWiFiJoin isOpen:self.device])
 		[groups addObject:@{@"title": @"Open network", @"rows":
 			@[@[@"Can't join", @"Hidden network (no name to join by)"]]}];
+	if (self.mapIdentifier)
+		[groups addObject:@{@"title": @"", @"rows": @[@[@"Show on Map", @""]], @"action": @"map"}];
 	[groups addObject:@{@"title": @"Identity", @"rows": identity}];
 	[groups addObject:@{@"title": @"Signal", @"rows": signal}];
 	if (speed.count) [groups addObject:@{@"title": @"Speed Test", @"rows": speed}];
@@ -186,7 +202,7 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
 	NSArray *row = self.groups[ip.section][@"rows"][ip.row];
-	if ([self.groups[ip.section][@"action"] boolValue]) {
+	if (self.groups[ip.section][@"action"]) {
 		UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
 		cell.textLabel.text = row[0];
 		cell.textLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
@@ -207,7 +223,9 @@
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
 	[tv deselectRowAtIndexPath:ip animated:YES];
-	if ([self.groups[ip.section][@"action"] boolValue]) [ALWiFiJoin join:self.device from:self];
+	NSString *action = self.groups[ip.section][@"action"];
+	if ([action isEqualToString:@"join"]) [ALWiFiJoin join:self.device from:self];
+	else if ([action isEqualToString:@"map"]) [ALAppDelegate showOnMap:self.mapIdentifier];
 }
 
 @end

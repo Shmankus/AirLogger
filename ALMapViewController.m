@@ -13,6 +13,7 @@
 #import "ALLocationProvider.h"
 #import "ALDevice.h"
 #import "ALLog.h"
+#import "ALAppDelegate.h"
 
 // MapKit can't render on this device (Maps.app/engine missing), so we draw the
 // map with Leaflet in a WKWebView and push fresh estimates in via JS so pan/zoom
@@ -30,6 +31,8 @@ static const double kRecencyTauBT = 600.0;
 @property (nonatomic, strong) WKWebView *web;
 @property (nonatomic) BOOL pageReady;
 @property (nonatomic, strong) NSTimer *liveTimer;
+@property (nonatomic, copy) NSString *focusId;   // pin to keep visible + focus (nil = none)
+@property (nonatomic) BOOL focusPending;         // focus once the page is ready
 
 // Filters
 @property (nonatomic) NSInteger typeFilter;      // -1 = all, else ALDeviceType
@@ -47,6 +50,7 @@ static const double kRecencyTauBT = 600.0;
 	WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
 	WKUserContentController *ucc = [[WKUserContentController alloc] init];
 	[ucc addScriptMessageHandler:self name:@"err"];
+	[ucc addScriptMessageHandler:self name:@"detail"];
 	NSString *hook = @"window.onerror=function(m,s,l,c){try{window.webkit.messageHandlers.err.postMessage(m+' @'+l+':'+c);}catch(e){}};";
 	[ucc addUserScript:[[WKUserScript alloc] initWithSource:hook
 											  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
@@ -177,9 +181,28 @@ static const double kRecencyTauBT = 600.0;
 }
 
 - (void)recenter {
-	// Re-fit the view to the pins on the next push.
+	// Re-fit the view to the pins on the next push (and drop any focused pin).
+	self.focusId = nil;
 	[self.web evaluateJavaScript:@"didFit=false;" completionHandler:nil];
 	[self pushData];
+}
+
+- (void)focusOnIdentifier:(NSString *)identifier {
+	self.focusId = identifier;
+	self.focusPending = YES;
+	[self loadViewIfNeeded];
+	[self applyFocus];
+}
+
+- (void)applyFocus {
+	if (!self.pageReady || !self.focusPending || !self.focusId) return;
+	self.focusPending = NO;
+	// Skip the auto-fit, push pins (so the focused one exists), then zoom to it.
+	[self.web evaluateJavaScript:@"didFit=true;" completionHandler:nil];
+	[self pushData];
+	NSData *j = [NSJSONSerialization dataWithJSONObject:@[self.focusId] options:0 error:nil];
+	NSString *arg = [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding];
+	[self.web evaluateJavaScript:[NSString stringWithFormat:@"focusPin(%@[0]);", arg] completionHandler:nil];
 }
 
 #pragma mark - Data push
@@ -238,9 +261,10 @@ static const double kRecencyTauBT = 600.0;
 		NSDictionary *mi = metaInfo[id_];
 		NSString *band = mi[@"band"] ?: @"";
 		NSString *sec = mi[@"security"] ?: @"";
-		if (self.typeFilter >= 0 && t != self.typeFilter) continue;
-		if (self.bandFilter.length && ![band isEqualToString:self.bandFilter]) continue;
-		if (self.secFilter.length && ![sec hasPrefix:self.secFilter]) continue;
+		BOOL focused = [id_ isEqualToString:self.focusId];
+		if (!focused && self.typeFilter >= 0 && t != self.typeFilter) continue;
+		if (!focused && self.bandFilter.length && ![band isEqualToString:self.bandFilter]) continue;
+		if (!focused && self.secFilter.length && ![sec hasPrefix:self.secFilter]) continue;
 
 		double mlat = 0, mlon = 0; NSInteger best = -999;
 		for (NSDictionary *o in obs) {
@@ -333,11 +357,17 @@ static const double kRecencyTauBT = 600.0;
 #pragma mark - Web delegate
 
 - (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
+	if ([message.name isEqualToString:@"detail"]) {
+		if ([message.body isKindOfClass:[NSString class]])
+			[ALAppDelegate showDetailForIdentifier:message.body];
+		return;
+	}
 	ALLog(@"map(web) JS: %@", message.body);
 }
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
 	self.pageReady = YES;
 	[self pushData];
+	[self applyFocus];
 }
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
 	ALLog(@"map(web): didFail: %@", error.localizedDescription);
