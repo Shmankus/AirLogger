@@ -243,6 +243,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	[card addSubview:_connSSIDLabel];
 
 	_connDetailLabel = [[UILabel alloc] init];
+	_connDetailLabel.numberOfLines = 2;
 	_connDetailLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
 	_connDetailLabel.textColor = [UIColor secondaryLabelColor];
 	_connDetailLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -299,12 +300,13 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	self.connSSIDLabel.text = c ? c.displayName : @"Not connected";
 	NSMutableArray *parts = [NSMutableArray array];
 	if (c) {
-		[parts addObject:c.identifier];
 		if (c.info[@"Band"]) [parts addObject:c.info[@"Band"]];
 		if (c.info[@"Channel"]) [parts addObject:[@"ch " stringByAppendingString:c.info[@"Channel"]]];
 		if (c.rssi < 0) [parts addObject:[NSString stringWithFormat:@"%ld dBm", (long)c.rssi]];
 	}
-	self.connDetailLabel.text = parts.count ? [parts componentsJoinedByString:@" · "] : @"Join a Wi-Fi network to run a speed test";
+	NSString *radio = [parts componentsJoinedByString:@" · "];
+	self.connDetailLabel.text = c ? (radio.length ? [NSString stringWithFormat:@"%@\n%@", c.identifier, radio] : c.identifier)
+		: @"Join a Wi-Fi network to run a speed test";
 
 	if (self.speedTest.running) return; // progress owns the speed label and button
 	self.speedButton.enabled = (c != nil);
