@@ -64,6 +64,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
 - **MobileWiFi's `BSSID` string isn't zero-padded** (`18:90:88:9f:63:4`). `ALWiFiScanner`
   runs it through `ALVendor normalizeMAC:`; `ALDatabase normalizeBSSIDs` rewrites old rows
   (and speedtests) at open. Compare/store MACs only in normalized form.
+- **NEHotspotConfiguration fails with error 11 (`NEHotspotConfigurationErrorUnknown`,
+  "<unknown>")** for this app even with the HotspotConfiguration entitlement — likely the
+  same ad-hoc-signing identity problem as BLE. Joining uses MobileWiFi's private
+  association instead (its callback signature is unverified, so it's only logged).
 - **Classic Bluetooth has no RSSI.** `BluetoothDevice` has no `RSSI` method (KVC throws,
   `safeValue` returns nil), and MobileBluetooth has no `BTDeviceGetRSSI`; classic rows are
   always stored with rssi 0.
@@ -156,9 +160,11 @@ ALDetailViewController  per-device field breakdown (incl. per-AP list for groupe
                         "Show on Map" row if the device has a geotag (grouped Wi-Fi
                         uses its strongest geotagged AP, since pins are per BSSID)
 ALWiFiJoin              open-network helpers: isOpen (Security == "Open"; groups need all
-                        APs open) / canJoin (+ named, not hidden) / join via
-                        NEHotspotConfiguration (iOS shows its own prompt), result verified
-                        with NEHotspotNetwork fetchCurrent after 3s. Used by the cell's
+                        APs open) / canJoin (+ named, not hidden) / join: first
+                        MobileWiFi WiFiDeviceClientAssociateAsync on the strongest AP's
+                        network object from the last scan (ALWiFiScanner shared
+                        associateWithBSSIDs:, scans held 10s), else NEHotspotConfiguration;
+                        result verified by polling currentNetwork for 8s. Used by the cell's
                         green lock.open badge, the detail page's "Join Network" row, and
                         the Current list's trailing "Join" swipe action
 ALSpeedTest             download then upload vs speed.cloudflare.com (__down / __up, no

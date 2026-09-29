@@ -7,7 +7,7 @@
 + (BOOL)isOpen:(ALDevice *)device;
 // Open, and has a name to join by (hidden networks can't be joined from here).
 + (BOOL)canJoin:(ALDevice *)device;
-// Asks iOS to join the network (iOS shows its own confirmation), then reports the
-// outcome in an alert on `vc`.
+// Joins via MobileWiFi (falling back to NEHotspotConfiguration, which shows its
+// own iOS prompt), showing progress and then the verified outcome on `vc`.
 + (void)join:(ALDevice *)device from:(UIViewController *)vc;
 @end
