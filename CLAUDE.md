@@ -172,6 +172,19 @@ ALVendor                manufacturer lookups → info["Manufacturer"]: MAC OUI (
                         oui.txt (/24 entries from Wireshark's `manuf`) and company_ids.txt
                         (Bluetooth SIG company_identifiers.yaml); preloaded off-main at
                         launch. The All tab derives it for rows stored before it existed
+ALAdvDecoder            BLE advertisement → "Device Kind" / "OS Family" + extras. Apple
+                        Continuity TLVs (type,len,value; except 0x01 overflow, which has
+                        no length byte): 0x07 AirPods (prefix 0x01 = model + batteries,
+                        prefix 0x00 = model + the buds' classic BT address), 0x09
+                        AirPlay (IP + port), 0x10 Nearby Info (activity), 0x12 Find My,
+                        iBeacon, etc. Microsoft CDP beacon device type (Windows/Xbox/...),
+                        Samsung/Google markers, known 16-bit service UUIDs. decodeStoredInfo
+                        re-decodes rows from their stored hex (All tab, old rows)
+ALWiFiIE                parses the scan result's "IE" property (raw CFData, [id][len][data],
+                        SSID/rates stripped): Wi-Fi generation (HT/VHT/HE/EHT), channel
+                        width, spatial streams, BSS Load (clients, utilization), country,
+                        WPS attributes (make, model, device name, primary device type →
+                        Device Kind), Wi-Fi Direct / Hotspot 2.0, vendor-element OUIs
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
                         focusPin(id) centers + opens a popup; popup "View Details"

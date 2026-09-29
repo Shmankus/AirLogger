@@ -532,8 +532,13 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		group.sightings = total;
 		group.info[@"Access Points"] = [NSString stringWithFormat:@"%lu", (unsigned long)members.count];
 		if (channels.count) group.info[@"Channels"] = [channels.array componentsJoinedByString:@", "];
-		for (ALDevice *m in members) { // a mesh's APs share a vendor; take the first known
-			if (m.info[@"Manufacturer"]) { group.info[@"Manufacturer"] = m.info[@"Manufacturer"]; break; }
+		// A mesh's APs share vendor / model / standard; take each from the strongest
+		// AP that reports it.
+		for (NSString *k in @[@"Manufacturer", @"Wi-Fi Generation", @"Device Kind",
+							  @"WPS Manufacturer", @"WPS Model Name", @"WPS Model Number"]) {
+			for (ALDevice *m in members) {
+				if (m.info[k]) { group.info[k] = m.info[k]; break; }
+			}
 		}
 		[wifiRows addObject:group];
 	}

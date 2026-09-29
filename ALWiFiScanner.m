@@ -10,6 +10,7 @@
 #import "ALWiFiScanner.h"
 #import "ALLog.h"
 #import "ALVendor.h"
+#import "ALWiFiIE.h"
 #import <dlfcn.h>
 
 // Modern MobileWiFi API (iOS 13+). The legacy Apple80211* C API is gone.
@@ -225,6 +226,13 @@ static void ALWiFiScanCallback(WiFiDeviceClientRef device, CFArrayRef results, i
 	dev.info[@"Security"] = sec;
 
 	if (_isHidden && _isHidden(net)) dev.info[@"Hidden"] = @"Yes";
+
+	// Raw beacon elements: Wi-Fi generation, width, clients, WPS make/model, ...
+	if (_getProperty) {
+		CFTypeRef ie = _getProperty(net, CFSTR("IE"));
+		if (ie && CFGetTypeID(ie) == CFDataGetTypeID() && CFDataGetLength(ie) > 0)
+			[ALWiFiIE parseIE:(__bridge NSData *)ie into:dev.info];
+	}
 
 	// SNR from RSSI - noise floor.
 	if (_getProperty) {

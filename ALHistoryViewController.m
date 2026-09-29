@@ -13,6 +13,7 @@
 #import "ALDeviceCell.h"
 #import "ALDetailViewController.h"
 #import "ALVendor.h"
+#import "ALAdvDecoder.h"
 
 @interface ALHistoryViewController () <UISearchResultsUpdating, UISearchBarDelegate>
 @property (nonatomic, strong) NSArray<ALDevice *> *all;       // every stored device
@@ -87,6 +88,8 @@
 			}
 			if (m) d.info[@"Manufacturer"] = m;
 		}
+		// Likewise device kind / OS family etc. from the stored raw advertisement.
+		if (d.type == ALDeviceTypeBLE && !d.info[@"Device Kind"]) [ALAdvDecoder decodeStoredInfo:d.info];
 		[devs addObject:d];
 	}
 	[devs sortUsingComparator:^NSComparisonResult(ALDevice *a, ALDevice *b) {
