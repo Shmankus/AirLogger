@@ -354,6 +354,20 @@ static const double kMinMoveMeters = 10.0;
 	return out;
 }
 
+- (BOOL)hasGeotagForIdentifier:(NSString *)identifier {
+	if (!_db || identifier.length == 0) return NO;
+	__block BOOL out = NO;
+	dispatch_sync(_q, ^{
+		const char *sql = "SELECT 1 FROM sightings WHERE identifier=? AND lat IS NOT NULL LIMIT 1;";
+		sqlite3_stmt *st = NULL;
+		if (sqlite3_prepare_v2(self->_db, sql, -1, &st, NULL) != SQLITE_OK) return;
+		sqlite3_bind_text(st, 1, identifier.UTF8String, -1, SQLITE_TRANSIENT);
+		out = (sqlite3_step(st) == SQLITE_ROW);
+		sqlite3_finalize(st);
+	});
+	return out;
+}
+
 - (NSUInteger)totalSightings {
 	if (!_db) return 0;
 	__block NSUInteger n = 0;

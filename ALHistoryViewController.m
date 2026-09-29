@@ -82,6 +82,18 @@
 	[self applyFilter];
 }
 
+- (void)showDetailForIdentifier:(NSString *)identifier {
+	[self loadViewIfNeeded];
+	[self.navigationController popToRootViewControllerAnimated:NO];
+	[self reload];
+	for (ALDevice *d in self.all) {
+		if (![d.identifier isEqualToString:identifier]) continue;
+		ALDetailViewController *vc = [[ALDetailViewController alloc] initWithDevice:d];
+		[self.navigationController pushViewController:vc animated:YES];
+		return;
+	}
+}
+
 - (void)applyFilter {
 	NSString *q = self.search.searchBar.text.lowercaseString;
 	NSInteger scope = self.search.searchBar.selectedScopeButtonIndex; // 0 all,1 wifi,2 bt

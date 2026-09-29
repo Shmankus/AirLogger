@@ -118,7 +118,9 @@ use `class_copyMethodList` / `class_copyPropertyList` at runtime and read each v
 
 ```
 main.m                  entry point
-ALAppDelegate           UITabBarController: Current (live) / All (history) / Map tabs
+ALAppDelegate           UITabBarController: Current (live) / All (history) / Map tabs;
+                        cross-tab nav: +showOnMap: (detail → Map, focus pin) and
+                        +showDetailForIdentifier: (map popup → All tab → detail page)
 ALWiFiScanner           Wi-Fi via MobileWiFi (dlopen); async scan every ~6s; currentNetwork
                         (WiFiDeviceClientCopyCurrentNetwork) parsed like scan results
 ALBluetoothScanner      Classic BT via BluetoothManager; CoreBluetooth (BLE) scaffold
@@ -136,7 +138,9 @@ ALHistoryViewController "All" tab: full DB history via allDevices; UISearchContr
                         text search + scope bar (All / Wi-Fi / BT); title tracks scope;
                         trash = wipe DB
 ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi,
-                        and a Speed Test section: latest across the group's APs)
+                        and a Speed Test section: latest across the group's APs);
+                        "Show on Map" row if the device has a geotag (grouped Wi-Fi
+                        uses its strongest geotagged AP, since pins are per BSSID)
 ALWiFiJoin              open-network helpers: isOpen (Security == "Open"; groups need all
                         APs open) / canJoin (+ named, not hidden) / join via
                         NEHotspotConfiguration (iOS shows its own prompt), result verified
@@ -149,7 +153,10 @@ ALSpeedTest             download then upload vs speed.cloudflare.com (__down / _
                         (__down caps at <100,000,000 bytes — larger returns HTTP 403;
                         non-2xx responses fail the test rather than scoring ~0 Mbps)
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
-Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s
+Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
+                        focusPin(id) centers + opens a popup; popup "View Details"
+                        posts the id to the `detail` message handler. A focused pin
+                        (focusId) bypasses the map filters until refresh/filter change
 ALLog.h                 file logger (no `log` CLI on iOS)
 entitlements.plist      wifi.* + bluetooth.access/internal/system +
                         com.apple.developer.networking.HotspotConfiguration (joining)

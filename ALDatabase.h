@@ -25,6 +25,9 @@
 // @{identifier, ssid, down, up (Mbps NSNumbers), ts} or nil if never tested.
 - (NSDictionary *)speedTestForIdentifier:(NSString *)identifier;
 
+// YES if the device has at least one geotagged sighting (i.e. has a map pin).
+- (BOOL)hasGeotagForIdentifier:(NSString *)identifier;
+
 - (NSUInteger)totalSightings;
 - (NSString *)path;
 

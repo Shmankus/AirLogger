@@ -10,7 +10,30 @@
 #import "ALHistoryViewController.h"
 #import "ALMapViewController.h"
 
+@interface ALAppDelegate ()
+@property (nonatomic, strong) UITabBarController *tabs;
+@property (nonatomic, strong) ALHistoryViewController *history;
+@property (nonatomic, strong) ALMapViewController *map;
+@end
+
 @implementation ALAppDelegate
+
++ (ALAppDelegate *)shared {
+	return (ALAppDelegate *)[UIApplication sharedApplication].delegate;
+}
+
++ (void)showOnMap:(NSString *)identifier {
+	ALAppDelegate *app = [self shared];
+	[app.map.navigationController popToRootViewControllerAnimated:NO];
+	app.tabs.selectedViewController = app.map.navigationController;
+	[app.map focusOnIdentifier:identifier];
+}
+
++ (void)showDetailForIdentifier:(NSString *)identifier {
+	ALAppDelegate *app = [self shared];
+	app.tabs.selectedViewController = app.history.navigationController;
+	[app.history showDetailForIdentifier:identifier];
+}
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)opts {
 	self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
@@ -34,6 +57,9 @@
 
 	UITabBarController *tabs = [[UITabBarController alloc] init];
 	tabs.viewControllers = @[listNav, histNav, mapNav];
+	self.tabs = tabs;
+	self.history = history;
+	self.map = map;
 
 	self.window.rootViewController = tabs;
 	[self.window makeKeyAndVisible];

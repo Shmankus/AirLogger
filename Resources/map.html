@@ -32,6 +32,18 @@
     .leaflet-container a {
       color: #0a84ff;
     }
+
+    .detail-btn {
+      display: block;
+      width: 100%;
+      margin-top: 8px;
+      padding: 6px 0;
+      border: 0;
+      border-radius: 8px;
+      background: #0a84ff;
+      color: #fff;
+      font: 600 13px -apple-system, sans-serif;
+    }
   </style>
 </head>
 
@@ -79,8 +91,24 @@
         '<span style="font-family:monospace;opacity:0.7">' + 'Last Seen: ' + (timeConverter(p.ts)).toString() + '</span><br>' +
         '<span style="font-family:monospace;opacity:0.7">' + p.id + '</span><br>' +
         p.type + ' &middot; ' + p.rssi + ' dBm<br>' +
-        p.n + ' obs &middot; ~' + Math.round(p.radius) + ' m &middot; ' + p.method;
+        p.n + ' obs &middot; ~' + Math.round(p.radius) + ' m &middot; ' + p.method +
+        '<button class="detail-btn" onclick="openDetail(\'' + p.id + '\')">View Details</button>';
     }
+
+    // Popup button: native switches to the All tab and opens this device's detail page.
+    function openDetail(id) {
+      try { window.webkit.messageHandlers.detail.postMessage(id); } catch (x) { }
+    }
+
+    // Called from native (after updateData) to center on a pin and open its popup.
+    window.focusPin = function (id) {
+      var e = markers[id];
+      if (!e) return;
+      e.cur = e.target.slice();
+      e.m.setLatLng(e.cur);
+      map.setView(e.cur, Math.max(map.getZoom(), 18), { animate: false });
+      e.m.openPopup();
+    };
 
     // Called from native every few seconds with { u:[lat,lon], pins:[...] }.
     window.updateData = function (d) {
