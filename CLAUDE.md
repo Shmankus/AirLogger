@@ -51,10 +51,22 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   stored the low bits of the object's address, so every Wi-Fi channel/band logged before
   the fix is garbage (e.g. `-1303352152`). Read `WiFiNetworkGetProperty(net, "CHANNEL")`
   as a CFNumber. Any `WiFiNetworkGet*` with a surprising value: suspect a CF return type.
-- **BLE (CoreBluetooth) does NOT work.** Even authorized (`CBManagerAuthorization=3`,
-  powered on, scanning), `bluetoothd` never delivers `didDiscoverPeripheral` to this
-  ad-hoc-signed app. The code path exists but yields nothing. Don't burn time re-trying;
-  it's a daemon-side gate on sideloaded apps.
+- **BLE (CoreBluetooth) needs the privileged-daemon flag.** `bluetoothd` can't tie this
+  ad-hoc-signed app's session (`AirLogger.<hash>.unsigned-central-...`) to the foreground
+  app, so it treats it as backgrounded (`FG:0` in its `ScanParams` log) — and a background
+  scan with no service filter gets nothing. Fix: create the `CBCentralManager` with
+  `CBManagerIsPrivilegedDaemonKey: @YES` and scan with
+  `CBCentralManagerScanOptionIsPrivilegedDaemonKey: @YES` (private exports, resolved via
+  `dlsym`; honored thanks to the `bluetooth.internal`/`system` entitlements). The session
+  then shows `DMN:1` and `didDiscoverPeripheral` delivers with real RSSI.
+- **Debugging daemons:** `oslog` (rootless package) is installed on the device:
+  `oslog --debug -p bluetoothd`. Strip ANSI colours before grepping.
+- **MobileWiFi's `BSSID` string isn't zero-padded** (`18:90:88:9f:63:4`). `ALWiFiScanner`
+  runs it through `ALVendor normalizeMAC:`; `ALDatabase normalizeBSSIDs` rewrites old rows
+  (and speedtests) at open. Compare/store MACs only in normalized form.
+- **Classic Bluetooth has no RSSI.** `BluetoothDevice` has no `RSSI` method (KVC throws,
+  `safeValue` returns nil), and MobileBluetooth has no `BTDeviceGetRSSI`; classic rows are
+  always stored with rssi 0.
 - **The app CANNOT write its own sandbox container** (`Documents`/`tmp` are denied under
   this entitlement set). Writable system paths (`/var/mobile/...`, `/var/tmp`, `/tmp`) work.
   So the **SQLite DB and log live at `/var/mobile/Library/AirLogger/`** — also survives
@@ -91,10 +103,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   MobileWiFi in dealloc while it holds run-loop sources also crashes. Fixed by reusing
   scanner instances across pause/resume, a `_stopped` guard that drops late callbacks, and
   NOT calling `dlclose`.
-- **BLE is hidden in the UI**, not removed. The scanner code and the `ble` section-building
-  still exist; the Current tab just omits it via `kDisplaySections` and the All tab's scope
-  bar drops it. Re-enable by adding `ALDeviceTypeBLE` back to `kDisplaySections` if
-  CoreBluetooth ever starts delivering.
+- **The Current list shows one type at a time.** A Wi-Fi / BLE / Classic segmented control
+  (`typeControl`, segment index == `ALDeviceType` == index into `self.sections`) picks the
+  type; segment titles carry per-type counts, refreshed in `updateSummary`. Only titles
+  that changed are re-set, since `rebuildAndReload` runs every second.
 
 ## Available device fields (discovered via introspection)
 
@@ -108,7 +120,7 @@ use `class_copyMethodList` / `class_copyPropertyList` at runtime and read each v
   (→ SNR), `BEACON_INT`, `AP_MODE`, `RATES`, `IE`, `80211D_IE` (country code). Security via
   `WiFiNetworkIsWEP/IsWPA/IsSAE`(WPA3)`/IsEAP`(enterprise)`/IsWAPI/IsHidden`; band from the
   channel number (1-14 = 2.4 GHz, else 5 GHz; the iPhone 7 radio can't see 6 GHz) or `WiFiNetworkGetOperatingBand`.
-- **Bluetooth** (`BluetoothDevice` methods): `name`, `address`, `RSSI`, `majorClass`/
+- **Bluetooth** (`BluetoothDevice` methods): `name`, `address`, `majorClass`/
   `minorClass` (+`majorClassName`/`minorClassName`), `connected`, `paired`, `batteryLevel`
   (+`supportsBatteryLevel`), `vendorId`, `productId`, `productName`, `isAppleAudioDevice`,
   `isAccessory`, `connectedServices`. `BluetoothManager` also offers `connectedDevices`,
@@ -123,7 +135,8 @@ ALAppDelegate           UITabBarController: Current (live) / All (history) / Map
                         +showDetailForIdentifier: (map popup → All tab → detail page)
 ALWiFiScanner           Wi-Fi via MobileWiFi (dlopen); async scan every ~6s; currentNetwork
                         (WiFiDeviceClientCopyCurrentNetwork) parsed like scan results
-ALBluetoothScanner      Classic BT via BluetoothManager; CoreBluetooth (BLE) scaffold
+ALBluetoothScanner      Classic BT via BluetoothManager; BLE via CoreBluetooth with the
+                        privileged-daemon init/scan options
 ALLocationProvider      Core Location singleton; background updates enabled
 ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlogger.sqlite;
                         bestLocationsPerDevice / geotaggedObservations / allDevices / wipe;
@@ -131,11 +144,12 @@ ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlog
 ALDevice                unified device model (type, id, name, rssi, info, children)
 ALDeviceCell            custom list cell (type icon + signal pill)
 ALRootViewController    "Current" tab: live scan list; Live (last 30s, kLiveWindow) /
-                        Session toggle; SSID grouping; BLE section hidden via
-                        kDisplaySections (shows Wi-Fi + Classic only); header has a
+                        Session toggle + Wi-Fi / BLE / Classic type picker (one type
+                        listed at a time); SSID grouping; header has a
                         "Connected Wi-Fi" card (refreshed every 5s) with Speed Test button
 ALHistoryViewController "All" tab: full DB history via allDevices; UISearchController with
-                        text search + scope bar (All / Wi-Fi / BT); title tracks scope;
+                        text search + scope bar (All / Wi-Fi / BLE / Classic; scope
+                        index - 1 == ALDeviceType); title tracks scope;
                         trash = wipe DB
 ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi,
                         and a Speed Test section: latest across the group's APs);
@@ -152,6 +166,12 @@ ALSpeedTest             download then upload vs speed.cloudflare.com (__down / _
                         allowsCellularAccess = NO so it always measures Wi-Fi
                         (__down caps at <100,000,000 bytes — larger returns HTTP 403;
                         non-2xx responses fail the test rather than scoring ~0 Mbps)
+ALVendor                manufacturer lookups → info["Manufacturer"]: MAC OUI (Wi-Fi BSSID,
+                        classic address; skipped for randomized/locally-administered MACs)
+                        and BLE Company ID. Tables are "KEY\tName" files in Resources:
+                        oui.txt (/24 entries from Wireshark's `manuf`) and company_ids.txt
+                        (Bluetooth SIG company_identifiers.yaml); preloaded off-main at
+                        launch. The All tab derives it for rows stored before it existed
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
                         focusPin(id) centers + opens a popup; popup "View Details"
@@ -178,7 +198,10 @@ entitlements.plist      wifi.* + bluetooth.access/internal/system +
     newest (`kKeepRecentWiFi`) plus the strongest of the rest (APs don't move; strong = close
     = accurate). Bluetooth keeps its newest (devices move with people).
   - `open` applies the cap/collapse once to pre-existing data (`trimAll`).
-  - Consequence: `cnt` in `allDevices` means "places seen", not raw sightings.
+  - Consequence: `cnt` in `allDevices` means "places seen", not raw sightings. The UI
+    labels it that way: devices loaded from the DB set `ALDevice.fromHistory`, so
+    `sightingsText` reads "2 places" (All tab) vs "300 heard" (Current tab, which counts
+    every live callback — BLE with duplicates allowed reports several per second).
 - **Speed tests** (`speedtests`): `identifier (BSSID, PK), ssid, down_mbps, up_mbps, ts` —
   latest result per AP only (`INSERT OR REPLACE`). Wiped along with sightings. While a test
   runs, Wi-Fi scanning is held (`[wifi stop]`) because off-channel scans drag throughput
@@ -202,7 +225,7 @@ entitlements.plist      wifi.* + bluetooth.access/internal/system +
   WLS solution but a sane determinant). Any future weighting change must keep the matrix
   well-scaled, or use a relative determinant threshold.
 - **Map filters** (`ALMapViewController`): a `UIMenu` on the filter bar button filters pins
-  by Type (Wi-Fi/Bluetooth), Band (2.4/5/6 GHz), and Security (Open/WEP/WPA·WPA2/WPA3),
+  by Type (Wi-Fi/BLE/Classic Bluetooth), Band (2.4/5/6 GHz), and Security (Open/WEP/WPA·WPA2/WPA3),
   applied natively in `computePinsJSON` before pushing. Band/security come from each
   device's stored `info` JSON via `allDevices`; security match is prefix-based.
 

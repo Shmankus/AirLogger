@@ -42,11 +42,13 @@
 	[identity addObject:@[@"Type", [ALDevice nameForType:self.device.type]]];
 	[identity addObject:@[@"Name", self.device.displayName]];
 	if (!grouped) [identity addObject:@[@"Identifier", self.device.identifier ?: @"—"]];
+	if (self.device.info[@"Manufacturer"]) [identity addObject:@[@"Manufacturer", self.device.info[@"Manufacturer"]]];
 
 	NSMutableArray *signal = [NSMutableArray array];
 	NSString *rssiText = grouped ? @"strongest" : @"RSSI";
 	[signal addObject:@[rssiText, (self.device.rssi == 0 ? @"—" : [NSString stringWithFormat:@"%ld dBm", (long)self.device.rssi])]];
-	[signal addObject:@[@"Sightings", [NSString stringWithFormat:@"%lu", (unsigned long)self.device.sightings]]];
+	[signal addObject:@[(self.device.fromHistory ? @"Places seen" : @"Times heard"),
+						[NSString stringWithFormat:@"%lu", (unsigned long)self.device.sightings]]];
 
 	// Latest speed test for this AP, or for a grouped network the most recent
 	// across its APs (noting which one it was run on).
@@ -80,7 +82,7 @@
 	NSArray *keys = [self.device.info.allKeys sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
 	for (NSString *k in keys) {
 		if ([k isEqualToString:@"BSSID"] || [k isEqualToString:@"UUID"] ||
-			[k isEqualToString:@"Access Points"]) continue; // shown elsewhere
+			[k isEqualToString:@"Access Points"] || [k isEqualToString:@"Manufacturer"]) continue; // shown elsewhere
 		[details addObject:@[k, [self.device.info[k] description]]];
 	}
 

@@ -105,8 +105,8 @@ static const double kRecencyTauBT = 600.0;
 - (UIMenu *)buildFilterMenu {
 	__weak typeof(self) ws = self;
 
-	NSArray *typeOpts = @[@"All", @"Wi-Fi", @"Bluetooth"];
-	NSInteger typeVals[] = { -1, ALDeviceTypeWiFi, ALDeviceTypeClassicBT };
+	NSArray *typeOpts = @[@"All", @"Wi-Fi", @"BLE", @"Classic Bluetooth"];
+	NSInteger typeVals[] = { -1, ALDeviceTypeWiFi, ALDeviceTypeBLE, ALDeviceTypeClassicBT };
 	NSMutableArray<UIMenuElement *> *typeActions = [NSMutableArray array];
 	for (NSUInteger i = 0; i < typeOpts.count; i++) {
 		NSInteger val = typeVals[i];

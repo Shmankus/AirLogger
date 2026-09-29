@@ -2,7 +2,8 @@
 //  ALHistoryViewController.m — AirLogger
 //
 //  "All" tab. Lists every device ever stored (ALDatabase allDevices), with a
-//  search bar (name or identifier) and a type scope filter (All / Wi-Fi / BT).
+//  search bar (name or identifier) and a type scope filter (All / Wi-Fi / BLE /
+//  Classic).
 //  Hosts the database-wipe (trash) button.
 //
 
@@ -11,6 +12,7 @@
 #import "ALDevice.h"
 #import "ALDeviceCell.h"
 #import "ALDetailViewController.h"
+#import "ALVendor.h"
 
 @interface ALHistoryViewController () <UISearchResultsUpdating, UISearchBarDelegate>
 @property (nonatomic, strong) NSArray<ALDevice *> *all;       // every stored device
@@ -34,7 +36,7 @@
 	self.search.searchResultsUpdater = self;
 	self.search.obscuresBackgroundDuringPresentation = NO;
 	self.search.searchBar.placeholder = @"Search name or address";
-	self.search.searchBar.scopeButtonTitles = @[@"All", @"Wi-Fi", @"BT"];
+	self.search.searchBar.scopeButtonTitles = @[@"All", @"Wi-Fi", @"BLE", @"Classic"];
 	self.search.searchBar.delegate = self;
 	self.navigationItem.searchController = self.search;
 	self.navigationItem.hidesSearchBarWhenScrolling = NO;
@@ -62,6 +64,7 @@
 		d.name = [r[@"name"] length] ? r[@"name"] : nil;
 		d.rssi = [r[@"rssi"] integerValue];
 		d.sightings = [r[@"cnt"] unsignedIntegerValue];
+		d.fromHistory = YES;
 		NSDate *last = [NSDate dateWithTimeIntervalSince1970:[r[@"last"] doubleValue]];
 		d.lastSeen = last;
 		d.firstSeen = last;
@@ -72,6 +75,18 @@
 			if ([parsed isKindOfClass:[NSDictionary class]]) [d.info addEntriesFromDictionary:parsed];
 		}
 		if ([r[@"channel"] length]) d.info[@"Channel"] = r[@"channel"];
+		// Rows logged before manufacturer lookup existed: derive it now.
+		if (!d.info[@"Manufacturer"]) {
+			NSString *m = nil;
+			if (d.type == ALDeviceTypeBLE) {
+				unsigned cid = 0;
+				NSScanner *sc = [NSScanner scannerWithString:d.info[@"Company ID"] ?: @""];
+				if ([sc scanHexInt:&cid]) m = [ALVendor companyNameForID:(uint16_t)cid];
+			} else {
+				m = [ALVendor vendorForMAC:d.identifier];
+			}
+			if (m) d.info[@"Manufacturer"] = m;
+		}
 		[devs addObject:d];
 	}
 	[devs sortUsingComparator:^NSComparisonResult(ALDevice *a, ALDevice *b) {
@@ -96,16 +111,15 @@
 
 - (void)applyFilter {
 	NSString *q = self.search.searchBar.text.lowercaseString;
-	NSInteger scope = self.search.searchBar.selectedScopeButtonIndex; // 0 all,1 wifi,2 bt
+	NSInteger scope = self.search.searchBar.selectedScopeButtonIndex; // 0 all, else ALDeviceType + 1
 
-	NSArray *scopeNames = @[@"All", @"Wi-Fi", @"BT"];
+	NSArray *scopeNames = @[@"All", @"Wi-Fi", @"BLE", @"Classic"];
 	self.title = [NSString stringWithFormat:@"%@ Devices",
 				  scopeNames[(scope >= 0 && scope < (NSInteger)scopeNames.count) ? scope : 0]];
 
 	NSMutableArray *out = [NSMutableArray array];
 	for (ALDevice *d in self.all) {
-		if (scope == 1 && d.type != ALDeviceTypeWiFi) continue;
-		if (scope == 2 && d.type != ALDeviceTypeClassicBT) continue;
+		if (scope > 0 && d.type != (ALDeviceType)(scope - 1)) continue;
 		if (q.length &&
 			![d.name.lowercaseString containsString:q] &&
 			![d.identifier.lowercaseString containsString:q]) continue;
