@@ -1,3 +1,11 @@
+//
+//  ALRootViewController.m — AirLogger
+//
+//  "Current" tab. Owns the scanners, ingests live sightings into an in-memory
+//  store (and the database), and shows them grouped by radio type with SSID
+//  grouping. Has a Live (last 30s) / Session toggle; BLE is hidden.
+//
+
 #import "ALRootViewController.h"
 #import "ALDetailViewController.h"
 #import "ALDeviceCell.h"

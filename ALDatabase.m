@@ -1,3 +1,13 @@
+//
+//  ALDatabase.m — AirLogger
+//
+//  SQLite store (singleton) for GPS-tagged sightings, at
+//  /var/mobile/Library/AirLogger/ (the app's sandbox container isn't writable,
+//  and this path survives reinstalls). Handles throttled inserts and the
+//  aggregate queries that back the map (best/observed locations) and the
+//  history list (allDevices), plus wipe.
+//
+
 #import "ALDatabase.h"
 #import <sqlite3.h>
 

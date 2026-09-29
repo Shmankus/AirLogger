@@ -1,3 +1,12 @@
+//
+//  ALBluetoothScanner.m — AirLogger
+//
+//  Bluetooth scanner. Discovers classic Bluetooth devices via the private
+//  BluetoothManager framework (requires the privileged bluetooth.* entitlements).
+//  A CoreBluetooth BLE path exists but yields nothing — bluetoothd does not
+//  deliver advertisements to this sideloaded app.
+//
+
 #import "ALBluetoothScanner.h"
 #import "ALLog.h"
 #import <CoreBluetooth/CoreBluetooth.h>

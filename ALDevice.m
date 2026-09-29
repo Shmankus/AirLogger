@@ -1,3 +1,11 @@
+//
+//  ALDevice.m — AirLogger
+//
+//  Unified model for a scanned device (Wi-Fi / BLE / classic BT): identifier,
+//  name, RSSI, an extensible info dictionary, timestamps, and optional child
+//  entries (used when Wi-Fi access points are grouped under one SSID).
+//
+
 #import "ALDevice.h"
 
 @implementation ALDevice

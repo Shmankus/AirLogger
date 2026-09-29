@@ -1,3 +1,10 @@
+//
+//  ALAppDelegate.m — AirLogger
+//
+//  App delegate. Builds the root UITabBarController with three tabs:
+//  Current (live scan), All (stored history), and Map.
+//
+
 #import "ALAppDelegate.h"
 #import "ALRootViewController.h"
 #import "ALHistoryViewController.h"

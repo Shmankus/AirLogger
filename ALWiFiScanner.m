@@ -1,3 +1,12 @@
+//
+//  ALWiFiScanner.m — AirLogger
+//
+//  Wi-Fi scanner. Drives the private MobileWiFi (WiFiManagerClient /
+//  WiFiDeviceClient) API — resolved at runtime with dlopen/dlsym — to run
+//  periodic async scans and report SSID, BSSID, RSSI, channel, band, and
+//  security for each nearby access point.
+//
+
 #import "ALWiFiScanner.h"
 #import "ALLog.h"
 #import <dlfcn.h>

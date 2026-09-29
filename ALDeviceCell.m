@@ -1,3 +1,11 @@
+//
+//  ALDeviceCell.m — AirLogger
+//
+//  Custom table cell for a device row: colored type-icon badge, name, monospaced
+//  identifier, a meta line, and a color-coded RSSI pill with sighting count.
+//  Also vends the shared type/RSSI color helpers used across the UI and map.
+//
+
 #import "ALDeviceCell.h"
 
 @interface ALDeviceCell ()

@@ -1,3 +1,11 @@
+//
+//  ALDetailViewController.m — AirLogger
+//
+//  Per-device detail screen. Shows a header (icon, name, type, signal) and
+//  grouped field sections: Identity, Signal, Access Points (for grouped Wi-Fi),
+//  Advertisement, and Timing.
+//
+
 #import "ALDetailViewController.h"
 #import "ALDeviceCell.h"
 

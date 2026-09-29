@@ -1,3 +1,11 @@
+//
+//  ALLocationProvider.m — AirLogger
+//
+//  Core Location wrapper (singleton). Exposes the current fix and a status
+//  string, with background updates enabled so scanning/logging continues with
+//  the screen off.
+//
+
 #import "ALLocationProvider.h"
 
 @interface ALLocationProvider () <CLLocationManagerDelegate>

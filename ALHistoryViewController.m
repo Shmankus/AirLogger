@@ -1,3 +1,11 @@
+//
+//  ALHistoryViewController.m — AirLogger
+//
+//  "All" tab. Lists every device ever stored (ALDatabase allDevices), with a
+//  search bar (name or identifier) and a type scope filter (All / Wi-Fi / BT).
+//  Hosts the database-wipe (trash) button.
+//
+
 #import "ALHistoryViewController.h"
 #import "ALDatabase.h"
 #import "ALDevice.h"

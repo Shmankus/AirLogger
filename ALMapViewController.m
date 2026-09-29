@@ -1,3 +1,12 @@
+//
+//  ALMapViewController.m — AirLogger
+//
+//  "Map" tab. MapKit can't render on this device, so the map is a WKWebView
+//  running Leaflet (Resources/map.html) with OSM tiles. Computes each device's
+//  estimated position (RSSI-weighted centroid / least-squares multilateration)
+//  from the database and pushes fresh estimates into the page via updateData().
+//
+
 #import "ALMapViewController.h"
 #import <WebKit/WebKit.h>
 #import "ALDatabase.h"
