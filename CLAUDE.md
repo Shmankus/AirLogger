@@ -143,6 +143,17 @@ entitlements.plist      wifi.* + bluetooth.access/internal/system
   It's approximate by nature (single-receiver RSSI). Note: the user removed stricter
   geometry guards in favor of the looser `n>=3` behavior, accepting that a strong nearby AP
   can be misplaced.
+- **Recency-weight underflow (fixed — don't reintroduce).** The multilateration weights
+  each observation by `exp(-age/τ)`. With data more than ~1 h old those weights underflow
+  toward zero, shrinking the normal-equations matrix until its determinant falls below the
+  `1e-3` cutoff, so *every* device silently falls back to the centroid. Fix: normalize the
+  weights by their max before the solve (scaling all weights by a constant yields the same
+  WLS solution but a sane determinant). Any future weighting change must keep the matrix
+  well-scaled, or use a relative determinant threshold.
+- **Map filters** (`ALMapViewController`): a `UIMenu` on the filter bar button filters pins
+  by Type (Wi-Fi/Bluetooth), Band (2.4/5/6 GHz), and Security (Open/WEP/WPA·WPA2/WPA3),
+  applied natively in `computePinsJSON` before pushing. Band/security come from each
+  device's stored `info` JSON via `allDevices`; security match is prefix-based.
 
 ## Conventions
 
