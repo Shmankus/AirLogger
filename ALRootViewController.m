@@ -54,10 +54,13 @@ static const NSInteger kDisplaySectionCount = 2;
 	self.tableView.separatorInset = UIEdgeInsetsMake(0, 62, 0, 0);
 	[self.tableView registerClass:[ALDeviceCell class] forCellReuseIdentifier:@"dev"];
 
-	self.navigationItem.rightBarButtonItem =
-		[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemPause
-													  target:self
-													  action:@selector(toggleScan)];
+	// Start with the Pause icon (or Play, depending on initial state)
+	UIImage *pauseImage = [UIImage systemImageNamed:@"pause.fill"];
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:pauseImage
+		style:UIBarButtonItemStylePlain
+		target:self
+		action:@selector(toggleScan)];
+
 
 	[self buildSummaryHeader];
 	[self startScan];
