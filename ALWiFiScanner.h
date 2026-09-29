@@ -25,4 +25,8 @@
 // Joins using the saved network record itself, so wifid supplies the stored
 // password. Returns NO if the SSID isn't saved or the API is missing.
 - (BOOL)associateWithSavedSSID:(NSString *)ssid;
+
+// Drops the current Wi-Fi association (the network stays saved). Returns NO if
+// the API is missing. The outcome isn't reported: check currentNetwork.
+- (BOOL)disassociate;
 @end

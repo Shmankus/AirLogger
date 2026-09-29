@@ -33,6 +33,7 @@ typedef WiFiNetworkRef (*WiFiDeviceClientCopyCurrentNetwork_f)(WiFiDeviceClientR
 typedef void          (*WiFiAssociateCallback)(WiFiDeviceClientRef, WiFiNetworkRef, CFDictionaryRef, int, void *);
 typedef void          (*WiFiDeviceClientAssociateAsync_f)(WiFiDeviceClientRef, WiFiNetworkRef, WiFiAssociateCallback, void *);
 typedef CFArrayRef    (*WiFiManagerClientCopyNetworks_f)(WiFiManagerRef); // saved networks
+typedef void          (*WiFiDeviceClientDisassociate_f)(WiFiDeviceClientRef);
 
 static const NSTimeInterval kSavedRefresh = 30.0;
 
@@ -78,6 +79,7 @@ static void ALWiFiAssociateCallback(WiFiDeviceClientRef device, WiFiNetworkRef n
 	WiFiNetworkBool_f _isWEP, _isWPA, _isSAE, _isEAP, _isWAPI, _isHidden;
 	WiFiDeviceClientAssociateAsync_f        _associate;
 	WiFiManagerClientCopyNetworks_f         _copyNetworks;
+	WiFiDeviceClientDisassociate_f          _disassociate;
 	BOOL _stopped;
 
 	NSDictionary<NSString *, id> *_savedBySSID;  // SSID -> saved WiFiNetworkRef
@@ -120,6 +122,7 @@ static void ALWiFiAssociateCallback(WiFiDeviceClientRef device, WiFiNetworkRef n
 		_isHidden    = (WiFiNetworkBool_f) dlsym(_lib, "WiFiNetworkIsHidden");
 		_associate   = (WiFiDeviceClientAssociateAsync_f) dlsym(_lib, "WiFiDeviceClientAssociateAsync");
 		_copyNetworks = (WiFiManagerClientCopyNetworks_f) dlsym(_lib, "WiFiManagerClientCopyNetworks");
+		_disassociate = (WiFiDeviceClientDisassociate_f)  dlsym(_lib, "WiFiDeviceClientDisassociate");
 
 		ALLog(@"WiFi: create=%p sched=%p copyDev=%p scan=%p getSSID=%p",
 			  _create, _schedule, _copyDevices, _scanAsync, _getSSID);
@@ -245,6 +248,13 @@ static void ALWiFiAssociateCallback(WiFiDeviceClientRef device, WiFiNetworkRef n
 	_holdScansUntil = [NSDate dateWithTimeIntervalSinceNow:kJoinScanHold];
 	ALLog(@"WiFi: associating with saved network '%@'", ssid);
 	_associate(_device, (__bridge WiFiNetworkRef)net, ALWiFiAssociateCallback, NULL);
+	return YES;
+}
+
+- (BOOL)disassociate {
+	if (!_disassociate || !_device) return NO;
+	ALLog(@"WiFi: disassociating");
+	_disassociate(_device);
 	return YES;
 }
 

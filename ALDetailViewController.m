@@ -3,8 +3,9 @@
 //
 //  Per-device detail screen. Shows a header (icon, name, type, signal) and
 //  grouped field sections: Identity, Signal, Speed Test (Wi-Fi, if one was run),
-//  Access Points (for grouped Wi-Fi), Advertisement, and Timing. Open Wi-Fi
-//  networks get a "Join Network" button at the top.
+//  Access Points (for grouped Wi-Fi), Advertisement, and Timing. Wi-Fi networks
+//  get a "Disconnect from Network" button at the top while connected, otherwise
+//  "Join Network" if joinable (open, or saved in Settings).
 //
 
 #import "ALDetailViewController.h"
@@ -16,6 +17,7 @@
 @interface ALDetailViewController ()
 @property (nonatomic, strong) ALDevice *device;
 @property (nonatomic, strong) NSArray<NSDictionary *> *groups; // @{title, rows:[[k,v]], action?}
+@property (nonatomic, strong) NSArray<NSDictionary *> *baseGroups; // everything but the Wi-Fi action row
 @property (nonatomic, copy) NSString *mapIdentifier; // pin to show on the map (nil = no pin)
 @end
 
@@ -106,11 +108,6 @@
 	}
 
 	NSMutableArray *groups = [NSMutableArray array];
-	if ([ALWiFiJoin canJoin:self.device])
-		[groups addObject:@{@"title": @"", @"rows": @[@[@"Join Network", @""]], @"action": @"join"}];
-	else if ([ALWiFiJoin isOpen:self.device])
-		[groups addObject:@{@"title": @"Open network", @"rows":
-			@[@[@"Can't join", @"Hidden network (no name to join by)"]]}];
 	if (self.mapIdentifier)
 		[groups addObject:@{@"title": @"", @"rows": @[@[@"Show on Map", @""]], @"action": @"map"}];
 	[groups addObject:@{@"title": @"Identity", @"rows": identity}];
@@ -121,9 +118,33 @@
 		@"rows": accessPoints}];
 	if (details.count) [groups addObject:@{@"title": @"Advertisement", @"rows": details}];
 	[groups addObject:@{@"title": @"Timing", @"rows": timing}];
-	self.groups = groups;
+	self.baseGroups = groups;
+	[self rebuildGroups];
 
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildGroups)
+												 name:ALWiFiJoinStateChangedNotification object:nil];
 	[self buildHeader];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[self rebuildGroups]; // the connection may have changed while this was hidden
+}
+
+// The Wi-Fi action row depends on the live connection, so it's rebuilt on top of
+// the fixed sections: Disconnect when on this network, else Join if possible.
+- (void)rebuildGroups {
+	NSMutableArray *groups = [NSMutableArray array];
+	if ([ALWiFiJoin isConnected:self.device])
+		[groups addObject:@{@"title": @"", @"rows": @[@[@"Disconnect from Network", @""]], @"action": @"leave"}];
+	else if ([ALWiFiJoin canJoin:self.device])
+		[groups addObject:@{@"title": @"", @"rows": @[@[@"Join Network", @""]], @"action": @"join"}];
+	else if ([ALWiFiJoin isOpen:self.device])
+		[groups addObject:@{@"title": @"Open network", @"rows":
+			@[@[@"Can't join", @"Hidden network (no name to join by)"]]}];
+	[groups addObjectsFromArray:self.baseGroups];
+	self.groups = groups;
+	[self.tableView reloadData];
 }
 
 - (void)buildHeader {
@@ -211,7 +232,8 @@
 		UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
 		cell.textLabel.text = row[0];
 		cell.textLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-		cell.textLabel.textColor = [UIColor systemBlueColor];
+		BOOL destructive = [self.groups[ip.section][@"action"] isEqualToString:@"leave"];
+		cell.textLabel.textColor = destructive ? [UIColor systemRedColor] : [UIColor systemBlueColor];
 		cell.textLabel.textAlignment = NSTextAlignmentCenter;
 		return cell;
 	}
@@ -230,6 +252,7 @@
 	[tv deselectRowAtIndexPath:ip animated:YES];
 	NSString *action = self.groups[ip.section][@"action"];
 	if ([action isEqualToString:@"join"]) [ALWiFiJoin join:self.device from:self];
+	else if ([action isEqualToString:@"leave"]) [ALWiFiJoin leave:self.device from:self];
 	else if ([action isEqualToString:@"map"]) [ALAppDelegate showOnMap:self.mapIdentifier];
 }
 

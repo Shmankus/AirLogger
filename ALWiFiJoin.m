@@ -15,7 +15,13 @@
 #import "ALLog.h"
 #import <NetworkExtension/NetworkExtension.h>
 
+NSString *const ALWiFiJoinStateChangedNotification = @"ALWiFiJoinStateChangedNotification";
+
 static const int kJoinPollSeconds = 8;
+static const int kLeavePollSeconds = 5;
+// After leaving, look again this long later: auto-join can pull the phone
+// straight back onto a saved network.
+static const NSTimeInterval kRejoinCheckDelay = 3.0;
 
 @implementation ALWiFiJoin
 
@@ -100,6 +106,64 @@ static const int kJoinPollSeconds = 8;
 	}];
 }
 
+#pragma mark - Leave
+
++ (BOOL)isConnected:(ALDevice *)d {
+	if (d.type != ALDeviceTypeWiFi || d.name.length == 0) return NO;
+	return [[[ALWiFiScanner shared] currentNetwork].name isEqualToString:d.name];
+}
+
++ (void)leave:(ALDevice *)d from:(UIViewController *)vc {
+	NSString *ssid = [d.name copy];
+	__weak UIViewController *weakVC = vc;
+	ALWiFiScanner *wifi = [ALWiFiScanner shared];
+
+	// The screen may be stale: the phone could have dropped off (or been moved to
+	// another network) since it was opened.
+	if (![self isConnected:d]) {
+		ALLog(@"Leave: '%@' not connected", ssid);
+		[self finish:nil title:[NSString stringWithFormat:@"Not connected to \"%@\"", ssid]
+			 message:@"You're already disconnected from this network." vc:weakVC];
+		return;
+	}
+
+	UIAlertController *progress = [UIAlertController
+		alertControllerWithTitle:[NSString stringWithFormat:@"Leaving \"%@\"…", ssid]
+						 message:nil preferredStyle:UIAlertControllerStyleAlert];
+	[vc presentViewController:progress animated:YES completion:nil];
+
+	void (^fail)(NSString *) = ^(NSString *why) {
+		[self finish:progress title:[NSString stringWithFormat:@"Couldn't leave \"%@\"", ssid] message:why vc:weakVC];
+	};
+	if (![wifi disassociate]) { fail(@"MobileWiFi's disconnect call isn't available."); return; }
+
+	[self waitForLeaving:ssid tries:kLeavePollSeconds done:^(BOOL left) {
+		ALLog(@"Leave: '%@' %@", ssid, left ? @"disconnected" : @"still connected");
+		if (!left) { fail(@"iOS is still connected to it."); return; }
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRejoinCheckDelay * NSEC_PER_SEC)),
+					   dispatch_get_main_queue(), ^{
+			if ([self isConnected:d]) {
+				ALLog(@"Leave: '%@' auto-rejoined", ssid);
+				fail(@"iOS reconnected to it automatically (Auto-Join). Turn off Auto-Join for it in Settings to stay off.");
+				return;
+			}
+			[self finish:progress title:[NSString stringWithFormat:@"Disconnected from \"%@\"", ssid]
+				 message:@"The network is still saved; you can join it again from here." vc:weakVC];
+		});
+	}];
+}
+
+// Polls once a second until the phone is no longer on `ssid`.
++ (void)waitForLeaving:(NSString *)ssid tries:(int)tries done:(void (^)(BOOL left))done {
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+		if (![[[ALWiFiScanner shared] currentNetwork].name isEqualToString:ssid]) { done(YES); return; }
+		if (tries <= 1) { done(NO); return; }
+		[self waitForLeaving:ssid tries:tries - 1 done:done];
+	});
+}
+
+#pragma mark - Helpers
+
 // Polls the current network once a second for up to `tries` seconds.
 + (void)waitForSSID:(NSString *)ssid tries:(int)tries done:(void (^)(BOOL joined))done {
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)NSEC_PER_SEC), dispatch_get_main_queue(), ^{
@@ -140,9 +204,11 @@ static const int kJoinPollSeconds = 8;
 	}];
 }
 
-// Dismisses the progress alert, then shows the result (title nil = no result alert).
+// Dismisses the progress alert, then shows the result (title nil = no result
+// alert), and tells screens the connection state may have changed.
 + (void)finish:(UIAlertController *)progress title:(NSString *)title message:(NSString *)msg
 			vc:(UIViewController *)vc {
+	[[NSNotificationCenter defaultCenter] postNotificationName:ALWiFiJoinStateChangedNotification object:nil];
 	void (^show)(void) = ^{ if (title) [self alert:title message:msg on:vc]; };
 	if (progress.presentingViewController) [progress dismissViewControllerAnimated:YES completion:show];
 	else show();
