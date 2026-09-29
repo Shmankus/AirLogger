@@ -20,7 +20,11 @@
 
 static const double kTxRef = -45.0;      // approx RSSI at 1 m
 static const double kPathLoss = 2.7;     // path-loss exponent
-static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
+// Recency time constants (seconds); recent readings weigh more. Wi-Fi APs rarely
+// move, so their strong older readings stay relevant; Bluetooth devices travel
+// with people, so only recent readings say where they are now.
+static const double kRecencyTauWiFi = 86400.0;
+static const double kRecencyTauBT = 600.0;
 
 @interface ALMapViewController () <WKNavigationDelegate, WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *web;
@@ -246,6 +250,7 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 		mlat /= n; mlon /= n;
 		double mpd = 111320.0 * cos(mlat * M_PI / 180.0);
 
+		double tau = (t == ALDeviceTypeWiFi) ? kRecencyTauWiFi : kRecencyTauBT;
 		double xs[n], ys[n], rs[n], tw[n], cw[n];
 		double sw = 0, cx = 0, cy = 0; NSInteger ki = 0; double kbestw = -1;
 		for (NSUInteger i = 0; i < n; i++) {
@@ -255,7 +260,7 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 			NSInteger rssi = [o[@"rssi"] integerValue];
 			double age = now - [o[@"ts"] doubleValue];
 			if (age < 0) age = 0;
-			double recency = exp(-age / kRecencyTau);           // recent weighs more
+			double recency = exp(-age / tau);                   // recent weighs more
 			double rweight = pow(10.0, rssi / 20.0);            // stronger weighs more
 			double combined = rweight * recency;
 			xs[i] = x; ys[i] = y;

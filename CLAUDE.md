@@ -131,14 +131,26 @@ entitlements.plist      wifi.* + bluetooth.access/internal/system
 ## Data & estimation
 
 - **DB schema** (`sightings`): `id, ts, type, identifier, name, rssi, channel, info(json),
-  lat, lon, h_acc`. Inserts throttled to once per identifier per 5s. Inspect over SSH:
+  lat, lon, h_acc`. Inspect over SSH:
   `sqlite3 /var/mobile/Library/AirLogger/airlogger.sqlite "SELECT ..."`.
+- **Storage policy** (`ALDatabase.recordDevice:` + `trimGeotagged:`), all types:
+  - Writes throttled to once per identifier per 5s.
+  - A new geotagged row is inserted only after moving `kMinMoveMeters` (10 m, or the fix's
+    accuracy if worse) from that device's latest geotagged row. While stationary, that row
+    is refreshed in place: ts/name/info updated, rssi EMA-smoothed (0.7 old / 0.3 new),
+    lat/lon kept anchored so GPS drift can't creep. Idling at a desk = one row per device.
+  - Fix-less sightings collapse to one row per device and don't count toward the cap.
+  - Cap of 50 geotagged rows per identifier (`kMaxSightingsPerDevice`). Wi-Fi keeps its 10
+    newest (`kKeepRecentWiFi`) plus the strongest of the rest (APs don't move; strong = close
+    = accurate). Bluetooth keeps its newest (devices move with people).
+  - `open` applies the cap/collapse once to pre-existing data (`trimAll`).
+  - Consequence: `cnt` in `allDevices` means "places seen", not raw sightings.
 - **`type`** enum: 0 = Wi-Fi, 1 = BLE, 2 = Classic BT.
 - **Identifier** is the stable key: BSSID (Wi-Fi), UUID (BLE), MAC (classic). Wi-Fi is
   grouped by SSID in the list only; the map keeps one pin per BSSID.
 - **Position estimate** (in `ALMapViewController.computePinsJSON`): project observations to
-  a local metric frame, compute an RSSI-weighted (and recency-weighted, τ≈600s) centroid,
-  and upgrade to recency-weighted least-squares **multilateration** when `n>=3` and a
+  a local metric frame, compute an RSSI-weighted and recency-weighted centroid (τ≈1 day for
+  Wi-Fi, 600s for BT: `kRecencyTauWiFi`/`kRecencyTauBT`), and upgrade to recency-weighted least-squares **multilateration** when `n>=3` and a
   distance cap holds. Path-loss model: `d = 10^((TxRef - rssi)/(10·n))`, `TxRef=-45`, `n=2.7`.
   It's approximate by nature (single-receiver RSSI). Note: the user removed stricter
   geometry guards in favor of the looser `n>=3` behavior, accepting that a strong nearby AP
