@@ -11,6 +11,7 @@
 #import "ALLog.h"
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <dlfcn.h>
+#import <objc/message.h>
 
 @interface ALBluetoothScanner () <CBCentralManagerDelegate>
 @property (nonatomic, strong) CBCentralManager *central;
@@ -57,9 +58,16 @@
 	[self.central stopScan];
 	if (self.btManager) {
 		[[NSNotificationCenter defaultCenter] removeObserver:self];
-		if ([self.btManager respondsToSelector:@selector(setDeviceScanningEnabled:)])
-			[self.btManager performSelector:@selector(setDeviceScanningEnabled:) withObject:nil];
+		[self sendBool:NO selector:@selector(setDeviceScanningEnabled:)];
 	}
+}
+
+// BluetoothManager's setters take a BOOL, not an object. performSelector:withObject:
+// would pass a pointer that gets read as an arbitrary BOOL (e.g. @YES read as NO,
+// which switched Bluetooth off on resume), so call through a correctly typed msgSend.
+- (void)sendBool:(BOOL)value selector:(SEL)sel {
+	if (![self.btManager respondsToSelector:sel]) return;
+	((void (*)(id, SEL, BOOL))objc_msgSend)(self.btManager, sel, value);
 }
 
 #pragma mark - BLE
@@ -171,20 +179,15 @@
 												 name:@"BluetoothDeviceDiscoveredNotification"
 											   object:nil];
 
-	if ([self.btManager respondsToSelector:@selector(setPowered:)])
-		[self.btManager performSelector:@selector(setPowered:) withObject:@YES];
+	// Only power the radio on if it's off; never touch it otherwise.
+	BOOL powered = YES;
+	if ([self.btManager respondsToSelector:@selector(powered)])
+		powered = ((BOOL (*)(id, SEL))objc_msgSend)(self.btManager, @selector(powered));
+	if (!powered) [self sendBool:YES selector:@selector(setPowered:)];
 
 	// Give the radio a moment to power on, then start inquiry.
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-		if ([self.btManager respondsToSelector:@selector(setDeviceScanningEnabled:)]) {
-			NSMethodSignature *sig = [self.btManager methodSignatureForSelector:@selector(setDeviceScanningEnabled:)];
-			NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-			inv.target = self.btManager;
-			inv.selector = @selector(setDeviceScanningEnabled:);
-			BOOL yes = YES;
-			[inv setArgument:&yes atIndex:2];
-			[inv invoke];
-		}
+		[self sendBool:YES selector:@selector(setDeviceScanningEnabled:)];
 	});
 }
 
