@@ -44,6 +44,7 @@
 	if (!grouped) [identity addObject:@[@"Identifier", self.device.identifier ?: @"—"]];
 	for (NSString *k in @[@"Device Kind", @"OS Family", @"Manufacturer"])
 		if (self.device.info[k]) [identity addObject:@[k, [self.device.info[k] description]]];
+	if ([ALWiFiJoin isSaved:self.device]) [identity addObject:@[@"Saved in Settings", @"Yes"]];
 
 	NSMutableArray *signal = [NSMutableArray array];
 	NSString *rssiText = grouped ? @"strongest" : @"RSSI";

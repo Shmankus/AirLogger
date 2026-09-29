@@ -67,7 +67,10 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
 - **NEHotspotConfiguration fails with error 11 (`NEHotspotConfigurationErrorUnknown`,
   "<unknown>")** for this app even with the HotspotConfiguration entitlement — likely the
   same ad-hoc-signing identity problem as BLE. Joining uses MobileWiFi's private
-  association instead (its callback signature is unverified, so it's only logged).
+  `WiFiDeviceClientAssociateAsync` instead — **verified** joining a saved WPA network
+  (wifid applied the stored password to the scan-result network; callback came back
+  `(device, network, info=NULL, err=0, ctx)`). Open-network joins use the same call but
+  haven't been tested in the field yet.
 - **Classic Bluetooth has no RSSI.** `BluetoothDevice` has no `RSSI` method (KVC throws,
   `safeValue` returns nil), and MobileBluetooth has no `BTDeviceGetRSSI`; classic rows are
   always stored with rssi 0.
@@ -164,7 +167,11 @@ ALWiFiJoin              open-network helpers: isOpen (Security == "Open"; groups
                         MobileWiFi WiFiDeviceClientAssociateAsync on the strongest AP's
                         network object from the last scan (ALWiFiScanner shared
                         associateWithBSSIDs:, scans held 10s), else NEHotspotConfiguration;
-                        result verified by polling currentNetwork for 8s. Used by the cell's
+                        result verified by polling currentNetwork for 8s. Secured networks
+                        saved in Settings (WiFiManagerClientCopyNetworks, matched by SSID,
+                        cached 30s) are joinable too: scan-result association first (wifid
+                        should use the stored password), then the saved record itself; the
+                        cell shows a blue key for them. Used by the cell's
                         green lock.open badge, the detail page's "Join Network" row, and
                         the Current list's trailing "Join" swipe action
 ALSpeedTest             download then upload vs speed.cloudflare.com (__down / __up, no

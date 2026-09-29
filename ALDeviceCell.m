@@ -3,7 +3,8 @@
 //
 //  Custom table cell for a device row: colored type-icon badge, name, monospaced
 //  identifier, a meta line, and a color-coded RSSI pill with sighting count.
-//  Open (passwordless) Wi-Fi gets a green unlocked-padlock next to its name.
+//  Open (passwordless) Wi-Fi gets a green unlocked-padlock next to its name, and
+//  secured Wi-Fi saved in Settings a blue key (both joinable from the app).
 //  Also vends the shared type/RSSI color helpers used across the UI and map.
 //
 
@@ -162,7 +163,14 @@
 	self.iconView.image = [UIImage systemImageNamed:[ALDeviceCell symbolForType:d.type] withConfiguration:cfg];
 
 	self.nameLabel.text = d.displayName;
-	self.openIcon.hidden = ![ALWiFiJoin isOpen:d];
+	// Green open padlock = no password; blue key = saved in Settings (joinable).
+	BOOL open = [ALWiFiJoin isOpen:d], saved = !open && [ALWiFiJoin isSaved:d];
+	self.openIcon.hidden = !(open || saved);
+	if (open || saved) {
+		self.openIcon.image = [UIImage systemImageNamed:(open ? @"lock.open.fill" : @"key.fill")
+			withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold]];
+		self.openIcon.tintColor = open ? [UIColor systemGreenColor] : [UIColor systemBlueColor];
+	}
 	self.subtitleLabel.text = d.identifier;
 
 	NSMutableArray *meta = [NSMutableArray array];

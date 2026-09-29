@@ -18,4 +18,11 @@
 // seconds meanwhile. Returns NO if none of them was in the last scan or the API
 // is missing. The outcome isn't reported: check currentNetwork.
 - (BOOL)associateWithBSSIDs:(NSArray<NSString *> *)bssids;
+
+// Saved ("known") networks from Settings > Wi-Fi, matched by SSID. The list is
+// re-read from MobileWiFi at most every 30s.
+- (BOOL)isSavedSSID:(NSString *)ssid;
+// Joins using the saved network record itself, so wifid supplies the stored
+// password. Returns NO if the SSID isn't saved or the API is missing.
+- (BOOL)associateWithSavedSSID:(NSString *)ssid;
 @end

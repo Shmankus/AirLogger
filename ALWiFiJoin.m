@@ -28,8 +28,12 @@ static const int kJoinPollSeconds = 8;
 	return [d.info[@"Security"] isEqualToString:@"Open"];
 }
 
++ (BOOL)isSaved:(ALDevice *)d {
+	return d.type == ALDeviceTypeWiFi && [[ALWiFiScanner shared] isSavedSSID:d.name];
+}
+
 + (BOOL)canJoin:(ALDevice *)d {
-	if (![self isOpen:d] || d.name.length == 0) return NO;
+	if (!([self isOpen:d] || [self isSaved:d]) || d.name.length == 0) return NO;
 	for (ALDevice *c in (d.children.count ? d.children : @[d]))
 		if ([c.info[@"Hidden"] isEqualToString:@"Yes"]) return NO;
 	return YES;
@@ -48,6 +52,10 @@ static const int kJoinPollSeconds = 8;
 						 message:nil preferredStyle:UIAlertControllerStyleAlert];
 	[vc presentViewController:progress animated:YES completion:nil];
 
+	if (![self isOpen:d]) {
+		[self joinSaved:ssid bssids:bssids progress:progress vc:weakVC];
+		return;
+	}
 	if (![[ALWiFiScanner shared] associateWithBSSIDs:bssids]) {
 		ALLog(@"Join: '%@' not in the last scan (or MobileWiFi unavailable); trying NEHotspotConfiguration", ssid);
 		[self joinWithHotspotConfiguration:ssid progress:progress vc:weakVC];
@@ -58,6 +66,37 @@ static const int kJoinPollSeconds = 8;
 		if (joined) [self finish:progress title:[NSString stringWithFormat:@"Joined \"%@\"", ssid]
 						 message:@"If the network has a sign-in page, iOS will show it." vc:weakVC];
 		else [self joinWithHotspotConfiguration:ssid progress:progress vc:weakVC];
+	}];
+}
+
+// Secured network saved in Settings. First associate with the scanned AP and let
+// wifid match it to the saved credentials; if that doesn't connect, associate
+// with the saved record itself. (NEHotspotConfiguration can't help: it would
+// need the password.)
++ (void)joinSaved:(NSString *)ssid bssids:(NSArray<NSString *> *)bssids
+		 progress:(UIAlertController *)progress vc:(UIViewController *)vc {
+	__weak UIViewController *weakVC = vc;
+	ALWiFiScanner *wifi = [ALWiFiScanner shared];
+	void (^fail)(void) = ^{
+		[self finish:progress title:[NSString stringWithFormat:@"Couldn't join \"%@\"", ssid]
+			 message:@"The network may be out of range. Try joining it once from Settings." vc:weakVC];
+	};
+	void (^trySavedRecord)(void) = ^{
+		if (![wifi associateWithSavedSSID:ssid]) { fail(); return; }
+		[self waitForSSID:ssid tries:kJoinPollSeconds done:^(BOOL joined) {
+			ALLog(@"Join: '%@' via saved record %@", ssid, joined ? @"connected" : @"did not connect");
+			if (joined) [self finish:progress title:[NSString stringWithFormat:@"Joined \"%@\"", ssid]
+							 message:@"Used the password saved in Settings." vc:weakVC];
+			else fail();
+		}];
+	};
+
+	if (![wifi associateWithBSSIDs:bssids]) { trySavedRecord(); return; }
+	[self waitForSSID:ssid tries:kJoinPollSeconds done:^(BOOL joined) {
+		ALLog(@"Join: '%@' (saved) via scan result %@", ssid, joined ? @"connected" : @"did not connect");
+		if (joined) [self finish:progress title:[NSString stringWithFormat:@"Joined \"%@\"", ssid]
+						 message:@"Used the password saved in Settings." vc:weakVC];
+		else trySavedRecord();
 	}];
 }
 
