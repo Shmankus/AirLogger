@@ -26,6 +26,12 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 @property (nonatomic, strong) WKWebView *web;
 @property (nonatomic) BOOL pageReady;
 @property (nonatomic, strong) NSTimer *liveTimer;
+
+// Filters
+@property (nonatomic) NSInteger typeFilter;      // -1 = all, else ALDeviceType
+@property (nonatomic, copy) NSString *bandFilter;    // nil = all
+@property (nonatomic, copy) NSString *secFilter;     // nil = all
+@property (nonatomic, strong) UIBarButtonItem *filterButton;
 @end
 
 @implementation ALMapViewController
@@ -53,7 +59,77 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 		[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
 													  target:self action:@selector(recenter)];
 
+	self.typeFilter = -1; // all
+	self.filterButton = [[UIBarButtonItem alloc]
+		initWithImage:[UIImage systemImageNamed:@"line.3.horizontal.decrease.circle"]
+				 menu:[self buildFilterMenu]];
+	self.navigationItem.leftBarButtonItem = self.filterButton;
+
 	[self loadPage];
+}
+
+#pragma mark - Filters
+
+- (BOOL)anyFilterActive {
+	return self.typeFilter >= 0 || self.bandFilter.length > 0 || self.secFilter.length > 0;
+}
+
+- (UIMenu *)singleMenu:(NSString *)title options:(NSArray<NSString *> *)opts
+			   current:(NSString *)current setter:(void (^)(NSString *))setter {
+	__weak typeof(self) ws = self;
+	NSMutableArray<UIMenuElement *> *actions = [NSMutableArray array];
+	for (NSString *opt in opts) {
+		BOOL isAll = [opt isEqualToString:@"All"];
+		BOOL on = (isAll && current == nil) || [opt isEqualToString:current];
+		UIAction *a = [UIAction actionWithTitle:opt image:nil identifier:nil
+										handler:^(__kindof UIAction *action) {
+			setter(isAll ? nil : opt);
+			[ws rebuildFilterMenu];
+			[ws recenter];
+		}];
+		a.state = on ? UIMenuElementStateOn : UIMenuElementStateOff;
+		[actions addObject:a];
+	}
+	return [UIMenu menuWithTitle:title image:nil identifier:nil
+						 options:UIMenuOptionsDisplayInline children:actions];
+}
+
+- (UIMenu *)buildFilterMenu {
+	__weak typeof(self) ws = self;
+
+	NSArray *typeOpts = @[@"All", @"Wi-Fi", @"Bluetooth"];
+	NSInteger typeVals[] = { -1, ALDeviceTypeWiFi, ALDeviceTypeClassicBT };
+	NSMutableArray<UIMenuElement *> *typeActions = [NSMutableArray array];
+	for (NSUInteger i = 0; i < typeOpts.count; i++) {
+		NSInteger val = typeVals[i];
+		UIAction *a = [UIAction actionWithTitle:typeOpts[i] image:nil identifier:nil
+										handler:^(__kindof UIAction *action) {
+			ws.typeFilter = val;
+			[ws rebuildFilterMenu];
+			[ws recenter];
+		}];
+		a.state = (self.typeFilter == val) ? UIMenuElementStateOn : UIMenuElementStateOff;
+		[typeActions addObject:a];
+	}
+	UIMenu *typeMenu = [UIMenu menuWithTitle:@"Type" image:nil identifier:nil
+									 options:UIMenuOptionsDisplayInline children:typeActions];
+
+	UIMenu *bandMenu = [self singleMenu:@"Band"
+								options:@[@"All", @"2.4 GHz", @"5 GHz", @"6 GHz"]
+								current:self.bandFilter setter:^(NSString *v) { ws.bandFilter = v; }];
+	UIMenu *secMenu = [self singleMenu:@"Security"
+							   options:@[@"All", @"Open", @"WEP", @"WPA/WPA2", @"WPA3"]
+							   current:self.secFilter setter:^(NSString *v) { ws.secFilter = v; }];
+
+	return [UIMenu menuWithTitle:@"" image:nil identifier:nil options:0
+						children:@[typeMenu, bandMenu, secMenu]];
+}
+
+- (void)rebuildFilterMenu {
+	self.filterButton.image = [UIImage systemImageNamed:
+		([self anyFilterActive] ? @"line.3.horizontal.decrease.circle.fill"
+								 : @"line.3.horizontal.decrease.circle")];
+	self.filterButton.menu = [self buildFilterMenu];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -127,12 +203,40 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 		meta[id_] = o;
 	}
 
+	// Per-device band/security (parsed from the latest stored info JSON) for filtering.
+	NSMutableDictionary<NSString *, NSDictionary *> *metaInfo = [NSMutableDictionary dictionary];
+	for (NSDictionary *r in [[ALDatabase shared] allDevices]) {
+		NSString *rid = r[@"identifier"];
+		if (!rid.length) continue;
+		NSString *band = @"", *sec = @"";
+		NSString *infoStr = r[@"info"];
+		if (infoStr.length) {
+			id p = [NSJSONSerialization JSONObjectWithData:[infoStr dataUsingEncoding:NSUTF8StringEncoding]
+												   options:0 error:nil];
+			if ([p isKindOfClass:[NSDictionary class]]) {
+				if (p[@"Band"]) band = p[@"Band"];
+				if (p[@"Security"]) sec = p[@"Security"];
+			}
+		}
+		metaInfo[rid] = @{ @"band": band, @"security": sec };
+	}
+
 	double now = [NSDate date].timeIntervalSince1970;
 	NSMutableArray *pins = [NSMutableArray array];
 
 	for (NSString *id_ in groups) {
 		NSArray *obs = groups[id_];
 		NSUInteger n = obs.count;
+
+		// Apply filters up front (skip the math for excluded devices).
+		NSDictionary *m = meta[id_];
+		ALDeviceType t = (ALDeviceType)[m[@"type"] integerValue];
+		NSDictionary *mi = metaInfo[id_];
+		NSString *band = mi[@"band"] ?: @"";
+		NSString *sec = mi[@"security"] ?: @"";
+		if (self.typeFilter >= 0 && t != self.typeFilter) continue;
+		if (self.bandFilter.length && ![band isEqualToString:self.bandFilter]) continue;
+		if (self.secFilter.length && ![sec hasPrefix:self.secFilter]) continue;
 
 		double mlat = 0, mlon = 0; NSInteger best = -999;
 		for (NSDictionary *o in obs) {
@@ -173,11 +277,19 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 		// Recency-weighted least-squares multilateration.
 		double ex = wcx, ey = wcy; BOOL usedMLAT = NO;
 		if (n >= 3) {
+			// Normalize the recency weights: scaling all weights by a constant
+			// gives the identical WLS solution, but keeps the matrix from
+			// underflowing to a near-zero determinant when the data is old
+			// (otherwise it always falls back to the centroid).
+			double maxTw = 0;
+			for (NSUInteger i = 0; i < n; i++) if (tw[i] > maxTw) maxTw = tw[i];
+			if (maxTw <= 0) maxTw = 1;
+
 			double xk = xs[ki], yk = ys[ki], rk = rs[ki];
 			double m00=0,m01=0,m11=0,v0=0,v1=0;
 			for (NSUInteger i = 0; i < n; i++) {
 				if ((NSInteger)i == ki) continue;
-				double wt = tw[i];
+				double wt = tw[i] / maxTw;
 				double a0 = 2*(xk - xs[i]), a1 = 2*(yk - ys[i]);
 				double bi = rs[i]*rs[i] - rk*rk - xs[i]*xs[i] - ys[i]*ys[i] + xk*xk + yk*yk;
 				m00 += wt*a0*a0; m01 += wt*a0*a1; m11 += wt*a1*a1; v0 += wt*a0*bi; v1 += wt*a1*bi;
@@ -196,8 +308,6 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 		double elon = mlon + ex / mpd;
 		double radius = n > 1 ? fmax(spread, 12.0) : 40.0;
 
-		NSDictionary *m = meta[id_];
-		ALDeviceType t = (ALDeviceType)[m[@"type"] integerValue];
 		NSString *name = [m[@"name"] length] ? m[@"name"] : id_;
 		double ts = [m[@"ts"] doubleValue];
 		[pins addObject:@{
@@ -206,6 +316,7 @@ static const double kRecencyTau = 600.0; // seconds; recent readings weigh more
 			@"rssi": @(best), @"n": @(n),
 			@"radius": @(radius), @"color": [self hexForType:t],
 			@"ts" : @(ts),
+			@"band": band, @"security": sec,
 			@"method": usedMLAT ? @"multilateration" : @"centroid",
 		}];
 	}
