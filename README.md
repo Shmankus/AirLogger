@@ -50,6 +50,11 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   observations from different vantage points are available. Recent readings are weighted
   more heavily — over about a day for Wi‑Fi, minutes for Bluetooth — so estimates converge
   as you move and track devices that relocate.
+- **Connected network + speed test** — the Current tab shows the Wi‑Fi network you're
+  joined to (SSID, BSSID, band, channel, signal) with a **Speed Test** button. It measures
+  download and upload over Wi‑Fi only (Cloudflare's public speed‑test endpoints, ~8 s per
+  direction), and the latest result is saved with that access point and shown on its
+  detail page in All Devices.
 - **Interactive dark map** — an OpenStreetMap slippy map (Leaflet) with color‑coded,
   tappable pins that update live and animate smoothly toward refined positions.
 - **Background operation** — keeps scanning and logging with the screen off via the
@@ -100,12 +105,14 @@ The app installs to `/var/jb/Applications/AirLogger.app`. Entitlements are defin
 ALWiFiScanner           Wi-Fi scanning via the private MobileWiFi API (dlopen/dlsym)
 ALBluetoothScanner      Classic Bluetooth via BluetoothManager; CoreBluetooth (BLE) scaffold
 ALLocationProvider      Core Location wrapper (foreground + background)
-ALDatabase              SQLite store for GPS-tagged sightings
+ALDatabase              SQLite store for GPS-tagged sightings + latest speed test per AP
 ALDevice                Unified device model
 ALDeviceCell            Custom list cell (type icon, signal pill)
-ALRootViewController    "Current" tab — live device list, grouped by radio type
+ALRootViewController    "Current" tab — live device list, grouped by radio type, plus
+                        the connected Wi-Fi card and speed-test button
 ALHistoryViewController "All" tab — full stored history with search + type filter
-ALDetailViewController  Per-device field breakdown
+ALDetailViewController  Per-device field breakdown (incl. last speed test for Wi-Fi)
+ALSpeedTest             Wi-Fi download/upload throughput test (Cloudflare endpoints)
 ALMapViewController     "Map" tab — WKWebView + Leaflet map, position estimation
 Resources/map.html      The Leaflet map page (edit freely; data arrives via updateData())
 ```

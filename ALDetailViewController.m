@@ -2,12 +2,13 @@
 //  ALDetailViewController.m — AirLogger
 //
 //  Per-device detail screen. Shows a header (icon, name, type, signal) and
-//  grouped field sections: Identity, Signal, Access Points (for grouped Wi-Fi),
-//  Advertisement, and Timing.
+//  grouped field sections: Identity, Signal, Speed Test (Wi-Fi, if one was run),
+//  Access Points (for grouped Wi-Fi), Advertisement, and Timing.
 //
 
 #import "ALDetailViewController.h"
 #import "ALDeviceCell.h"
+#import "ALDatabase.h"
 
 @interface ALDetailViewController ()
 @property (nonatomic, strong) ALDevice *device;
@@ -43,6 +44,27 @@
 	[signal addObject:@[rssiText, (self.device.rssi == 0 ? @"—" : [NSString stringWithFormat:@"%ld dBm", (long)self.device.rssi])]];
 	[signal addObject:@[@"Sightings", [NSString stringWithFormat:@"%lu", (unsigned long)self.device.sightings]]];
 
+	// Latest speed test for this AP, or for a grouped network the most recent
+	// across its APs (noting which one it was run on).
+	NSMutableArray *speed = [NSMutableArray array];
+	if (self.device.type == ALDeviceTypeWiFi) {
+		NSDictionary *latest = nil;
+		NSArray<ALDevice *> *aps = grouped ? self.device.children : @[self.device];
+		for (ALDevice *ap in aps) {
+			NSDictionary *t = [[ALDatabase shared] speedTestForIdentifier:ap.identifier];
+			if (t && (!latest || [t[@"ts"] doubleValue] > [latest[@"ts"] doubleValue])) latest = t;
+		}
+		if (latest) {
+			NSDateFormatter *when = [[NSDateFormatter alloc] init];
+			when.dateStyle = NSDateFormatterMediumStyle;
+			when.timeStyle = NSDateFormatterShortStyle;
+			[speed addObject:@[@"Download", [NSString stringWithFormat:@"%.1f Mbps", [latest[@"down"] doubleValue]]]];
+			[speed addObject:@[@"Upload", [NSString stringWithFormat:@"%.1f Mbps", [latest[@"up"] doubleValue]]]];
+			[speed addObject:@[@"Tested", [when stringFromDate:[NSDate dateWithTimeIntervalSince1970:[latest[@"ts"] doubleValue]]]]];
+			if (grouped) [speed addObject:@[@"Access point", latest[@"identifier"]]];
+		}
+	}
+
 	NSMutableArray *accessPoints = [NSMutableArray array];
 	for (ALDevice *c in self.device.children) {
 		NSString *v = (c.rssi == 0 ? @"— dBm" : [NSString stringWithFormat:@"%ld dBm", (long)c.rssi]);
@@ -65,6 +87,7 @@
 	NSMutableArray *groups = [NSMutableArray array];
 	[groups addObject:@{@"title": @"Identity", @"rows": identity}];
 	[groups addObject:@{@"title": @"Signal", @"rows": signal}];
+	if (speed.count) [groups addObject:@{@"title": @"Speed Test", @"rows": speed}];
 	if (accessPoints.count) [groups addObject:@{
 		@"title": [NSString stringWithFormat:@"Access Points (%lu)", (unsigned long)accessPoints.count],
 		@"rows": accessPoints}];

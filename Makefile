@@ -14,7 +14,7 @@ include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = AirLogger
 AirLogger_RESOURCES_FOLDER = Resources
-AirLogger_FILES = main.m ALAppDelegate.m ALDevice.m ALWiFiScanner.m ALBluetoothScanner.m ALDatabase.m ALLocationProvider.m ALDeviceCell.m ALRootViewController.m ALDetailViewController.m ALHistoryViewController.m ALMapViewController.m
+AirLogger_FILES = main.m ALAppDelegate.m ALDevice.m ALWiFiScanner.m ALBluetoothScanner.m ALDatabase.m ALLocationProvider.m ALDeviceCell.m ALRootViewController.m ALDetailViewController.m ALHistoryViewController.m ALMapViewController.m ALSpeedTest.m
 AirLogger_FRAMEWORKS = UIKit Foundation CoreFoundation CoreBluetooth CoreLocation MapKit WebKit
 AirLogger_LIBRARIES = sqlite3
 AirLogger_CFLAGS = -fobjc-arc
