@@ -3,9 +3,10 @@
 //
 //  "Current" tab. Owns the scanners, ingests live sightings into an in-memory
 //  store (and the database), and shows one radio type at a time (Wi-Fi / BLE /
-//  Classic picker, with per-type counts) with SSID grouping. Has a Live (last
-//  30s) / Session toggle. A second header card shows the connected Wi-Fi network
-//  and runs speed tests on it.
+//  Classic picker, with per-type counts) with SSID grouping. The Live (last
+//  30s) / Session toggle sits in the nav bar; a compact header card shows the
+//  connected Wi-Fi network and runs speed tests on it. The type picker (plus a
+//  small total / scan-state line) floats over the list so it stays reachable.
 //
 
 #import "ALRootViewController.h"
@@ -29,8 +30,8 @@ static const NSTimeInterval kLiveWindow = 30.0;
 static NSString *const kTypeSegmentTitles[] = { @"Wi-Fi", @"BLE", @"Classic" };
 static const NSInteger kTypeSegmentCount = 3;
 
-static const CGFloat kSummaryCardHeight = 164;
-static const CGFloat kHeaderHeight = 296; // summary card + connected Wi-Fi card
+static const CGFloat kHeaderHeight = 88;  // connected Wi-Fi card
+static const CGFloat kTypeBarHeight = 66; // type picker + count line
 static const NSTimeInterval kConnectionRefresh = 5.0;
 
 @interface ALRootViewController ()
@@ -41,16 +42,14 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 @property (nonatomic, strong) NSTimer *uiTimer;
 @property (nonatomic) BOOL scanning;
 
-// summary header
+// header + floating type bar
 @property (nonatomic, strong) UIView *summaryHeader;
-@property (nonatomic, strong) UILabel *totalLabel;
-@property (nonatomic, strong) UILabel *totalCaption;
-@property (nonatomic, strong) UIView *statusPill;
-@property (nonatomic, strong) UIView *statusDot;
-@property (nonatomic, strong) UILabel *statusPillLabel;
-@property (nonatomic, strong) UISegmentedControl *modeControl;
+@property (nonatomic, strong) UISegmentedControl *modeControl; // nav bar title view
 @property (nonatomic) NSInteger mode; // 0 = Live (recent), 1 = Session (all found)
+@property (nonatomic, strong) UIView *typeBar; // floats over the table, pinned under the nav bar
 @property (nonatomic, strong) UISegmentedControl *typeControl;
+@property (nonatomic, strong) UILabel *countLabel;      // "47 nearby now · Scanning"
+@property (nonatomic, strong) UILabel *scanStatusLabel; // shown type's scanner status
 @property (nonatomic) ALDeviceType shownType; // the one type listed below
 
 // connected Wi-Fi card
@@ -76,8 +75,13 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	self.title = @"Current";
-	self.navigationController.navigationBar.prefersLargeTitles = YES;
+	// No title: the tab bar already says "Current"; the Live/Session toggle takes its place.
+	self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+	_modeControl = [[UISegmentedControl alloc] initWithItems:@[@"Live", @"Session"]];
+	_modeControl.selectedSegmentIndex = 0;
+	_modeControl.frame = CGRectMake(0, 0, 180, 30);
+	[_modeControl addTarget:self action:@selector(modeChanged:) forControlEvents:UIControlEventValueChanged];
+	self.navigationItem.titleView = _modeControl;
 	self.tableView.backgroundColor = [UIColor systemGroupedBackgroundColor];
 	self.tableView.separatorInset = UIEdgeInsetsMake(0, 62, 0, 0);
 	[self.tableView registerClass:[ALDeviceCell class] forCellReuseIdentifier:@"dev"];
@@ -134,59 +138,36 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 			self.tableView.tableHeaderView = self.summaryHeader;
 		}
 	}
+	[self layoutTypeBar];
 }
 
-#pragma mark - Summary header
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+	[self layoutTypeBar];
+}
+
+#pragma mark - Header + type bar
 
 - (void)buildSummaryHeader {
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, kHeaderHeight)];
+	UIView *conn = [self buildConnectionCard];
+	[header addSubview:conn];
+	[NSLayoutConstraint activateConstraints:@[
+		[conn.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
+		[conn.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16],
+		[conn.topAnchor constraintEqualToAnchor:header.topAnchor constant:4],
+		[conn.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-8],
+	]];
+	self.summaryHeader = header;
+	self.tableView.tableHeaderView = header;
+	[self buildTypeBar];
+}
 
-	UIView *card = [[UIView alloc] init];
-	card.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
-	card.layer.cornerRadius = 14;
-	card.layer.cornerCurve = kCACornerCurveContinuous;
-	card.translatesAutoresizingMaskIntoConstraints = NO;
-	[header addSubview:card];
-
-	_totalLabel = [[UILabel alloc] init];
-	_totalLabel.font = [UIFont monospacedDigitSystemFontOfSize:36 weight:UIFontWeightBold];
-	_totalLabel.textColor = [UIColor labelColor];
-	_totalLabel.text = @"0";
-	_totalLabel.translatesAutoresizingMaskIntoConstraints = NO;
-	[card addSubview:_totalLabel];
-
-	_totalCaption = [[UILabel alloc] init];
-	_totalCaption.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
-	_totalCaption.textColor = [UIColor secondaryLabelColor];
-	_totalCaption.text = @"devices in range";
-	_totalCaption.translatesAutoresizingMaskIntoConstraints = NO;
-	[card addSubview:_totalCaption];
-
-	_statusPill = [[UIView alloc] init];
-	_statusPill.backgroundColor = [UIColor tertiarySystemGroupedBackgroundColor];
-	_statusPill.layer.cornerRadius = 13;
-	_statusPill.layer.cornerCurve = kCACornerCurveContinuous;
-	_statusPill.translatesAutoresizingMaskIntoConstraints = NO;
-	[card addSubview:_statusPill];
-
-	_statusDot = [[UIView alloc] init];
-	_statusDot.backgroundColor = [UIColor systemGreenColor];
-	_statusDot.layer.cornerRadius = 4;
-	_statusDot.translatesAutoresizingMaskIntoConstraints = NO;
-	[_statusPill addSubview:_statusDot];
-
-	_statusPillLabel = [[UILabel alloc] init];
-	_statusPillLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-	_statusPillLabel.textColor = [UIColor labelColor];
-	_statusPillLabel.text = @"Scanning";
-	_statusPillLabel.translatesAutoresizingMaskIntoConstraints = NO;
-	[_statusPill addSubview:_statusPillLabel];
-
-	_modeControl = [[UISegmentedControl alloc] initWithItems:@[@"Live", @"Session"]];
-	_modeControl.selectedSegmentIndex = 0;
-	[_modeControl addTarget:self action:@selector(modeChanged:) forControlEvents:UIControlEventValueChanged];
-	_modeControl.translatesAutoresizingMaskIntoConstraints = NO;
-	[card addSubview:_modeControl];
+// Inset-grouped section headers don't stick, so the type bar is a subview of the
+// table positioned over the (empty, same-height) section header and pinned under
+// the nav bar once the header scrolls past it. See layoutTypeBar.
+- (void)buildTypeBar {
+	UIView *bar = [[UIView alloc] init];
+	bar.backgroundColor = [UIColor systemGroupedBackgroundColor];
 
 	NSMutableArray *typeTitles = [NSMutableArray array];
 	for (NSInteger i = 0; i < kTypeSegmentCount; i++) [typeTitles addObject:kTypeSegmentTitles[i]];
@@ -194,52 +175,48 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	_typeControl.selectedSegmentIndex = ALDeviceTypeWiFi;
 	[_typeControl addTarget:self action:@selector(typeChanged:) forControlEvents:UIControlEventValueChanged];
 	_typeControl.translatesAutoresizingMaskIntoConstraints = NO;
-	[card addSubview:_typeControl];
+	[bar addSubview:_typeControl];
+
+	_countLabel = [[UILabel alloc] init];
+	_countLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightRegular];
+	_countLabel.textColor = [UIColor secondaryLabelColor];
+	_countLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	[_countLabel setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+	[bar addSubview:_countLabel];
+
+	_scanStatusLabel = [[UILabel alloc] init];
+	_scanStatusLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+	_scanStatusLabel.textColor = [UIColor tertiaryLabelColor];
+	_scanStatusLabel.textAlignment = NSTextAlignmentRight;
+	_scanStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	[_scanStatusLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+	[bar addSubview:_scanStatusLabel];
 
 	[NSLayoutConstraint activateConstraints:@[
-		[card.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
-		[card.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16],
-		[card.topAnchor constraintEqualToAnchor:header.topAnchor constant:4],
-		[card.heightAnchor constraintEqualToConstant:kSummaryCardHeight],
-
-		[_totalLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
-		[_totalLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
-		[_totalCaption.leadingAnchor constraintEqualToAnchor:_totalLabel.leadingAnchor constant:2],
-		[_totalCaption.topAnchor constraintEqualToAnchor:_totalLabel.bottomAnchor constant:0],
-
-		[_statusPill.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-		[_statusPill.centerYAnchor constraintEqualToAnchor:_totalLabel.centerYAnchor],
-		[_statusPill.heightAnchor constraintEqualToConstant:26],
-		[_statusDot.leadingAnchor constraintEqualToAnchor:_statusPill.leadingAnchor constant:12],
-		[_statusDot.centerYAnchor constraintEqualToAnchor:_statusPill.centerYAnchor],
-		[_statusDot.widthAnchor constraintEqualToConstant:8],
-		[_statusDot.heightAnchor constraintEqualToConstant:8],
-		[_statusPillLabel.leadingAnchor constraintEqualToAnchor:_statusDot.trailingAnchor constant:7],
-		[_statusPillLabel.trailingAnchor constraintEqualToAnchor:_statusPill.trailingAnchor constant:-12],
-		[_statusPillLabel.centerYAnchor constraintEqualToAnchor:_statusPill.centerYAnchor],
-
-		[_modeControl.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
-		[_modeControl.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-		[_modeControl.bottomAnchor constraintEqualToAnchor:_typeControl.topAnchor constant:-10],
-		[_modeControl.heightAnchor constraintEqualToConstant:30],
-
-		[_typeControl.leadingAnchor constraintEqualToAnchor:_modeControl.leadingAnchor],
-		[_typeControl.trailingAnchor constraintEqualToAnchor:_modeControl.trailingAnchor],
-		[_typeControl.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14],
+		[_typeControl.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor constant:16],
+		[_typeControl.trailingAnchor constraintEqualToAnchor:bar.trailingAnchor constant:-16],
+		[_typeControl.topAnchor constraintEqualToAnchor:bar.topAnchor constant:6],
 		[_typeControl.heightAnchor constraintEqualToConstant:30],
+
+		[_countLabel.leadingAnchor constraintEqualToAnchor:_typeControl.leadingAnchor constant:4],
+		[_countLabel.topAnchor constraintEqualToAnchor:_typeControl.bottomAnchor constant:7],
+		[_scanStatusLabel.trailingAnchor constraintEqualToAnchor:_typeControl.trailingAnchor constant:-4],
+		[_scanStatusLabel.firstBaselineAnchor constraintEqualToAnchor:_countLabel.firstBaselineAnchor],
+		[_scanStatusLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:_countLabel.trailingAnchor constant:8],
 	]];
 
-	UIView *conn = [self buildConnectionCard];
-	[header addSubview:conn];
-	[NSLayoutConstraint activateConstraints:@[
-		[conn.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
-		[conn.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
-		[conn.topAnchor constraintEqualToAnchor:card.bottomAnchor constant:10],
-		[conn.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-8],
-	]];
+	self.typeBar = bar;
+	[self.tableView addSubview:bar];
+	[self layoutTypeBar];
+}
 
-	self.summaryHeader = header;
-	self.tableView.tableHeaderView = header;
+- (void)layoutTypeBar {
+	if (!self.typeBar) return;
+	UITableView *tv = self.tableView;
+	CGFloat natural = [tv rectForHeaderInSection:0].origin.y;
+	CGFloat pinned = tv.contentOffset.y + tv.adjustedContentInset.top;
+	self.typeBar.frame = CGRectMake(0, MAX(natural, pinned), tv.bounds.size.width, kTypeBarHeight);
+	[tv bringSubviewToFront:self.typeBar]; // cells get re-added on reload
 }
 
 #pragma mark - Connected Wi-Fi
@@ -252,28 +229,26 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	card.translatesAutoresizingMaskIntoConstraints = NO;
 	[card addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showConnectedDetail)]];
 
-	UILabel *caption = [[UILabel alloc] init];
-	caption.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
-	caption.textColor = [UIColor secondaryLabelColor];
-	caption.text = @"CONNECTED WI-FI";
-	caption.translatesAutoresizingMaskIntoConstraints = NO;
-	[card addSubview:caption];
+	UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"wifi"]];
+	icon.tintColor = [ALDeviceCell colorForType:ALDeviceTypeWiFi];
+	icon.contentMode = UIViewContentModeScaleAspectFit;
+	icon.translatesAutoresizingMaskIntoConstraints = NO;
+	[card addSubview:icon];
 
 	_connSSIDLabel = [[UILabel alloc] init];
-	_connSSIDLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+	_connSSIDLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
 	_connSSIDLabel.textColor = [UIColor labelColor];
 	_connSSIDLabel.translatesAutoresizingMaskIntoConstraints = NO;
 	[card addSubview:_connSSIDLabel];
 
 	_connDetailLabel = [[UILabel alloc] init];
-	_connDetailLabel.numberOfLines = 2;
 	_connDetailLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
 	_connDetailLabel.textColor = [UIColor secondaryLabelColor];
 	_connDetailLabel.translatesAutoresizingMaskIntoConstraints = NO;
 	[card addSubview:_connDetailLabel];
 
 	_connSpeedLabel = [[UILabel alloc] init];
-	_connSpeedLabel.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
+	_connSpeedLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightMedium];
 	_connSpeedLabel.textColor = [UIColor labelColor];
 	_connSpeedLabel.adjustsFontSizeToFitWidth = YES;
 	_connSpeedLabel.minimumScaleFactor = 0.8;
@@ -281,37 +256,38 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	[card addSubview:_connSpeedLabel];
 
 	_speedButton = [UIButton buttonWithType:UIButtonTypeSystem];
-	[_speedButton setTitle:@"Speed Test" forState:UIControlStateNormal];
-	_speedButton.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-	[_speedButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-	[_speedButton setTitleColor:[UIColor colorWithWhite:1 alpha:0.6] forState:UIControlStateDisabled];
+	UIImageSymbolConfiguration *sym = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+	[_speedButton setImage:[UIImage systemImageNamed:@"speedometer" withConfiguration:sym] forState:UIControlStateNormal];
+	_speedButton.tintColor = [UIColor whiteColor];
 	_speedButton.backgroundColor = [UIColor systemBlueColor];
-	_speedButton.layer.cornerRadius = 15;
-	_speedButton.layer.cornerCurve = kCACornerCurveContinuous;
+	_speedButton.layer.cornerRadius = 18;
+	_speedButton.accessibilityLabel = @"Speed Test";
 	[_speedButton addTarget:self action:@selector(runSpeedTest) forControlEvents:UIControlEventTouchUpInside];
 	_speedButton.translatesAutoresizingMaskIntoConstraints = NO;
 	[card addSubview:_speedButton];
 
 	[NSLayoutConstraint activateConstraints:@[
-		[caption.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
-		[caption.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
+		[icon.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14],
+		[icon.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+		[icon.widthAnchor constraintEqualToConstant:24],
+		[icon.heightAnchor constraintEqualToConstant:24],
 
-		[_speedButton.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-		[_speedButton.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
-		[_speedButton.heightAnchor constraintEqualToConstant:30],
-		[_speedButton.widthAnchor constraintEqualToConstant:108],
+		[_speedButton.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14],
+		[_speedButton.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+		[_speedButton.widthAnchor constraintEqualToConstant:36],
+		[_speedButton.heightAnchor constraintEqualToConstant:36],
 
-		[_connSSIDLabel.leadingAnchor constraintEqualToAnchor:caption.leadingAnchor],
-		[_connSSIDLabel.topAnchor constraintEqualToAnchor:caption.bottomAnchor constant:2],
+		[_connSSIDLabel.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:12],
+		[_connSSIDLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:10],
 		[_connSSIDLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_speedButton.leadingAnchor constant:-10],
 
-		[_connDetailLabel.leadingAnchor constraintEqualToAnchor:caption.leadingAnchor],
-		[_connDetailLabel.topAnchor constraintEqualToAnchor:_connSSIDLabel.bottomAnchor constant:2],
-		[_connDetailLabel.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16],
+		[_connDetailLabel.leadingAnchor constraintEqualToAnchor:_connSSIDLabel.leadingAnchor],
+		[_connDetailLabel.topAnchor constraintEqualToAnchor:_connSSIDLabel.bottomAnchor constant:1],
+		[_connDetailLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_speedButton.leadingAnchor constant:-10],
 
-		[_connSpeedLabel.leadingAnchor constraintEqualToAnchor:caption.leadingAnchor],
-		[_connSpeedLabel.topAnchor constraintEqualToAnchor:_connDetailLabel.bottomAnchor constant:6],
-		[_connSpeedLabel.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16],
+		[_connSpeedLabel.leadingAnchor constraintEqualToAnchor:_connSSIDLabel.leadingAnchor],
+		[_connSpeedLabel.topAnchor constraintEqualToAnchor:_connDetailLabel.bottomAnchor constant:2],
+		[_connSpeedLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_speedButton.leadingAnchor constant:-10],
 	]];
 	return card;
 }
@@ -328,12 +304,12 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		if (c.rssi < 0) [parts addObject:[NSString stringWithFormat:@"%ld dBm", (long)c.rssi]];
 	}
 	NSString *radio = [parts componentsJoinedByString:@" · "];
-	self.connDetailLabel.text = c ? (radio.length ? [NSString stringWithFormat:@"%@\n%@", c.identifier, radio] : c.identifier)
-		: @"Join a Wi-Fi network to run a speed test";
+	// BSSID lives on the detail page (tap the card); keep this to one line.
+	self.connDetailLabel.text = c ? (radio.length ? radio : c.identifier) : @"Join a network to run a speed test";
 
 	if (self.speedTest.running) return; // progress owns the speed label and button
 	self.speedButton.enabled = (c != nil);
-	self.speedButton.alpha = c ? 1.0 : 0.5;
+	self.speedButton.alpha = c ? 1.0 : 0.4;
 	[self showLastSpeedTest];
 }
 
@@ -349,7 +325,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	NSString *ago = [rel localizedStringForDate:[NSDate dateWithTimeIntervalSince1970:[t[@"ts"] doubleValue]]
 								 relativeToDate:[NSDate date]];
 	self.connSpeedLabel.textColor = [UIColor labelColor];
-	self.connSpeedLabel.text = [NSString stringWithFormat:@"↓ %.1f  ↑ %.1f Mbps  ·  %@",
+	self.connSpeedLabel.text = [NSString stringWithFormat:@"↓ %.1f  ↑ %.1f Mbps · %@",
 								[t[@"down"] doubleValue], [t[@"up"] doubleValue], ago];
 }
 
@@ -461,12 +437,10 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		if (![[self.typeControl titleForSegmentAtIndex:i] isEqualToString:title])
 			[self.typeControl setTitle:title forSegmentAtIndex:i];
 	}
-	self.totalLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)total];
-
 	NSString *scope = (self.mode == 0) ? @"nearby now" : @"found this session";
-	self.totalCaption.text = [NSString stringWithFormat:@"%@", scope];
-	self.statusDot.backgroundColor = self.scanning ? [UIColor systemGreenColor] : [UIColor systemGrayColor];
-	self.statusPillLabel.text = self.scanning ? @"Scanning" : @"Paused";
+	self.countLabel.text = [NSString stringWithFormat:@"%lu %@ · %@", (unsigned long)total, scope,
+							self.scanning ? @"Scanning" : @"Paused"];
+	self.scanStatusLabel.text = [self statusForSection:self.shownType];
 }
 
 #pragma mark - Scanning
@@ -593,6 +567,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	[[ALStatusBar shared] noteCountsWiFi:wifiRows.count ble:ble.count classic:classic.count];
 	[self updateSummary];
 	[self.tableView reloadData];
+	[self layoutTypeBar];
 }
 
 #pragma mark - Section metadata
@@ -678,47 +653,11 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 #pragma mark - Section headers
 
-- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section { return 46; }
+// Spacer the floating type bar sits over (see buildTypeBar).
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section { return kTypeBarHeight; }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
-	ALDeviceType t = self.shownType;
-	UIView *v = [[UIView alloc] init];
-
-	UIView *dot = [[UIView alloc] init];
-	dot.backgroundColor = [ALDeviceCell colorForType:t];
-	dot.layer.cornerRadius = 5;
-	dot.translatesAutoresizingMaskIntoConstraints = NO;
-	[v addSubview:dot];
-
-	UILabel *title = [[UILabel alloc] init];
-	title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold];
-	title.textColor = [UIColor labelColor];
-	title.text = [NSString stringWithFormat:@"%@  %lu",
-				  [ALDevice nameForType:t], (unsigned long)self.sections[t].count];
-	title.translatesAutoresizingMaskIntoConstraints = NO;
-	[v addSubview:title];
-
-	UILabel *status = [[UILabel alloc] init];
-	status.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
-	status.textColor = [UIColor tertiaryLabelColor];
-	status.textAlignment = NSTextAlignmentRight;
-	status.text = [self statusForSection:t];
-	status.translatesAutoresizingMaskIntoConstraints = NO;
-	[status setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
-	[v addSubview:status];
-
-	[NSLayoutConstraint activateConstraints:@[
-		[dot.leadingAnchor constraintEqualToAnchor:v.leadingAnchor constant:20],
-		[dot.centerYAnchor constraintEqualToAnchor:v.centerYAnchor constant:4],
-		[dot.widthAnchor constraintEqualToConstant:10],
-		[dot.heightAnchor constraintEqualToConstant:10],
-		[title.leadingAnchor constraintEqualToAnchor:dot.trailingAnchor constant:8],
-		[title.centerYAnchor constraintEqualToAnchor:dot.centerYAnchor],
-		[status.trailingAnchor constraintEqualToAnchor:v.trailingAnchor constant:-20],
-		[status.centerYAnchor constraintEqualToAnchor:dot.centerYAnchor],
-		[status.leadingAnchor constraintGreaterThanOrEqualToAnchor:title.trailingAnchor constant:8],
-	]];
-	return v;
+	return [[UIView alloc] init];
 }
 
 @end

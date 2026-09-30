@@ -11,9 +11,10 @@ Details for each live in the gotchas and file map below.
 
 - **Scanning:** Wi-Fi (MobileWiFi), BLE (CoreBluetooth with the privileged-daemon flag),
   Classic Bluetooth (BluetoothManager, no RSSI). GPS-tagged into SQLite with bounded storage.
-- **Current tab:** Live/Session toggle + Wi-Fi / BLE / Classic type picker with counts;
-  connected Wi-Fi card with speed test; swipe to join. Counts read "N heard".
-- **All tab:** full history, search, All / Wi-Fi / BLE / Classic scope. Counts read "N places".
+- **Current tab:** no title; Live/Session toggle in the nav bar, compact connected Wi-Fi
+  card with speed test, pinned Wi-Fi / BLE / Classic type picker with counts + a small
+  "N nearby now · Scanning" line; swipe to join. Counts read "N heard".
+- **All tab:** full history, type picker, search, sort (Latest / RSSI / Name). Counts read "N places".
 - **Detail page:** Identity (Device Kind, OS Family, Manufacturer, Saved in Settings), decoded
   fields; buttons for Join / Disconnect, Track in Status Bar, Show on Map.
 - **Map:** Leaflet in a WKWebView; filters by type/band/security; detail → map focuses a
@@ -115,8 +116,18 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
     (**CartoDB dark tiles now require an API key** — don't use them).
   - The app **does** have outbound network (verified) — WKWebView loads Leaflet from a CDN
     and tiles from OSM fine.
-  - Leaflet `bringToFront()` on a canvas-rendered marker throws `t.parentNode` — avoid it;
-    draw circles then markers in separate passes instead.
+  - Leaflet `bringToFront()` on a canvas-rendered marker throws `t.parentNode` — avoid it.
+    The map uses `preferCanvas` (device dots on one canvas); the user's dot lives in its own
+    SVG pane (`user`, z-index 650) so it stays on top without `bringToFront`.
+  - **Rendering cost is bounded on purpose** (it was hurting framerate/battery): only pins
+    inside the viewport (+25%) get a marker, below zoom 18 nearby pins merge into a counted
+    cluster bubble (tap → zoom in), and the easing `requestAnimationFrame` loop runs only
+    while a dot is still moving. `render()` runs on `moveend` and after each `updateData`,
+    never per frame — keep per-frame work out of the page.
+  - **Clustering is hierarchical over all pins** (`buildClusters`, supercluster-style: each
+    zoom level greedily merges the level above within 50px), and culling happens *after*.
+    An earlier version grid-binned only the on-screen pins, so counts changed while panning
+    and a bubble could hold dots visually nearer another — don't cluster post-cull.
   - `map.html` start-location placeholders are `__LAT__` / `__LON__` (valid JS identifiers),
     NOT `{{LAT}}` mustache tokens — an HTML/JS formatter rewrites `{{ }}` into `{ }` object
     literals, which is a parse error that kills the whole script (updateData undefined).
@@ -190,14 +201,19 @@ ALDatabase              SQLite singleton at /var/mobile/Library/AirLogger/airlog
                         speedtests table (record/speedTestForIdentifier)
 ALDevice                unified device model (type, id, name, rssi, info, children)
 ALDeviceCell            custom list cell (type icon + signal pill)
-ALRootViewController    "Current" tab: live scan list; Live (last 30s, kLiveWindow) /
-                        Session toggle + Wi-Fi / BLE / Classic type picker (one type
-                        listed at a time); SSID grouping; header has a
-                        "Connected Wi-Fi" card (refreshed every 5s) with Speed Test button
-ALHistoryViewController "All" tab: full DB history via allDevices; UISearchController with
-                        text search + scope bar (All / Wi-Fi / BLE / Classic; scope
-                        index - 1 == ALDeviceType); title tracks scope;
-                        trash = wipe DB
+ALRootViewController    "Current" tab: live scan list; no nav title — the Live (last 30s,
+                        kLiveWindow) / Session toggle is the nav bar titleView. Header is a
+                        compact "Connected Wi-Fi" card (refreshed every 5s) with a
+                        speedometer Speed Test button. The Wi-Fi / BLE / Classic type
+                        picker + a small "N nearby now · Scanning" line live in a floating
+                        typeBar (inset-grouped headers don't stick, so it's a table subview
+                        pinned under the nav bar by layoutTypeBar over an empty section
+                        header spacer); SSID grouping
+ALHistoryViewController "All" tab: full DB history via allDevices; no nav title — a type
+                        picker (All / Wi-Fi / BLE / Classic; segment index - 1 ==
+                        ALDeviceType) is the titleView, with a UISearchController (text
+                        search) under it; sort menu (Latest / RSSI / Name, remembered in
+                        NSUserDefaults; RSSI puts classic's rssi 0 last); trash = wipe DB
 ALDetailViewController  per-device field breakdown (incl. per-AP list for grouped Wi-Fi,
                         and a Speed Test section: latest across the group's APs);
                         "Show on Map" row if the device has a geotag (grouped Wi-Fi
@@ -258,7 +274,13 @@ ALStatusBar             status-bar carrier text via the user's CarrierText tweak
                         the last text stays until changed with `carriertext`
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
-                        focusPin(id) centers + opens a popup; popup "View Details"
+                        clusters all pins per zoom (buildClusters), draws the viewport (render());
+                        focusPin(id) zooms to 18 (unclustered), centers + opens a popup; popup
+                        shows "N dots stacked here" (pins within 3 m overlap even at max
+                        zoom — why a "6" bubble can open to one visible dot) and Prev/Next,
+                        which walk all pins by distance from the dot the walk started on
+                        (order fixed while walking; a direct tap starts a new walk);
+                        popup content is only built while open; "View Details"
                         posts the id to the `detail` message handler. A focused pin
                         (focusId) bypasses the map filters until refresh/filter change
 ALLog.h                 file logger (no `log` CLI on iOS)

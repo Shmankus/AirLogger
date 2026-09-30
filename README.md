@@ -49,10 +49,11 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   AirTags, iBeacons, Handoff/AirDrop/hotspot), Microsoft beacons (Windows desktop/laptop,
   Xbox…), Google/Android and Samsung markers, and common services (Fast Pair, Tile,
   SmartTag, Eddystone, HID, heart‑rate).
-- **Three tabs** — **Current** (what's around you right now, with a **Wi‑Fi / BLE /
-  Classic** picker showing one type at a time plus per‑type counts), **All** (the full
-  stored history with text search over name/address and an All/Wi‑Fi/BLE/Classic filter),
-  and **Map**.
+- **Three tabs** — **Current** (what's around you right now: a **Live / Session** toggle
+  in the nav bar and a **Wi‑Fi / BLE / Classic** picker with per‑type counts that stays
+  pinned while you scroll, showing one type at a time), **All** (the full stored history
+  with an **All / Wi‑Fi / BLE / Classic** picker, text search over name/address, and a
+  **Latest / RSSI / Name** sort), and **Map**.
 - **SSID grouping** — access points that share a network name collapse into one row in
   the list, with every individual BSSID still available in the detail view.
 - **Clear counts** — the Current tab shows how many times a device was *heard* this
@@ -70,7 +71,8 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   more heavily — over about a day for Wi‑Fi, minutes for Bluetooth — so estimates converge
   as you move and track devices that relocate.
 - **Connected network + speed test** — the Current tab shows the Wi‑Fi network you're
-  joined to (SSID, BSSID, band, channel, signal) with a **Speed Test** button. It measures
+  joined to (SSID, band, channel, signal, last result) in a compact card with a **Speed
+  Test** button; tap the card for its full details. It measures
   download and upload over Wi‑Fi only (Cloudflare's public speed‑test endpoints, ~8 s per
   direction), and the latest result is saved with that access point and shown on its
   detail page in All Devices.
@@ -80,9 +82,12 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   the password stored in Settings). While connected, the detail page offers **Disconnect
   from Network** instead, and reports if you'd already dropped off or iOS auto‑rejoined.
 - **Interactive dark map** — an OpenStreetMap slippy map (Leaflet) with color‑coded,
-  tappable pins that update live and animate smoothly toward refined positions. Filter by
+  tappable pins that update live and animate smoothly toward refined positions. Dense
+  areas merge into counted clusters that split apart as you zoom in, and only pins on
+  screen are drawn, so it stays smooth with thousands of devices logged. Filter by
   type, band and security. **Show on Map** on a detail page jumps to that device's pin; a
-  pin's popup has **View Details** to jump back.
+  pin's popup has **View Details** to jump back, and **Prev / Next** to step through the
+  nearest pins in order of distance (handy where several devices' dots overlap).
 - **Status‑bar readout** — with the companion CarrierText tweak installed, the carrier
   name can show live info while you use other apps: nearby device counts (`W18 L29 C2`),
   the connected network and its signal, speed‑test progress, or **tracking** one device's
@@ -145,7 +150,7 @@ Sources/
   UI/
     ALRootViewController    "Current" tab — live list with a Wi-Fi/BLE/Classic picker, the
                             connected Wi-Fi card, speed test, and the status-bar menu
-    ALHistoryViewController "All" tab — full stored history with search + type filter
+    ALHistoryViewController "All" tab — full stored history with type picker, search + sort
     ALDetailViewController  Per-device field breakdown + Join/Disconnect, Track, Show on Map
     ALMapViewController     "Map" tab — WKWebView + Leaflet map, position estimation
     ALDeviceCell            Custom list cell (type icon, signal pill, open/saved badge)
