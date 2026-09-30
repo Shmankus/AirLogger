@@ -5,6 +5,28 @@ jailbroken iPhone** that scans nearby Wi-Fi and Bluetooth devices, GPS-tags each
 sighting, logs to SQLite, and estimates transmitter locations on a map. Objective-C,
 built with Theos.
 
+## Features at a glance
+
+Details for each live in the gotchas and file map below.
+
+- **Scanning:** Wi-Fi (MobileWiFi), BLE (CoreBluetooth with the privileged-daemon flag),
+  Classic Bluetooth (BluetoothManager, no RSSI). GPS-tagged into SQLite with bounded storage.
+- **Current tab:** Live/Session toggle + Wi-Fi / BLE / Classic type picker with counts;
+  connected Wi-Fi card with speed test; swipe to join. Counts read "N heard".
+- **All tab:** full history, search, All / Wi-Fi / BLE / Classic scope. Counts read "N places".
+- **Detail page:** Identity (Device Kind, OS Family, Manufacturer, Saved in Settings), decoded
+  fields; buttons for Join / Disconnect, Track in Status Bar, Show on Map.
+- **Map:** Leaflet in a WKWebView; filters by type/band/security; detail → map focuses a
+  pin, pin popup "View Details" → All tab detail.
+- **Decoding:** manufacturer via OUI / Bluetooth SIG company ID (ALVendor); BLE Apple
+  Continuity / Microsoft / Google / Samsung → device kind + OS, AirPods batteries, AirPlay
+  IP, Find My (ALAdvDecoder); Wi-Fi beacon IEs → generation, width, streams, clients, WPS
+  make/model (ALWiFiIE).
+- **Wi-Fi join/leave:** open and Settings-saved networks via MobileWiFi association;
+  disconnect via disassociate (ALWiFiJoin).
+- **Status bar:** carrier text via the user's CarrierText tweak — nearby counts, connected
+  Wi-Fi, live RSSI tracking of one device, speed-test progress (ALStatusBar).
+
 ## Target device & environment
 
 - **Device:** iPhone 7 (arm64, A10), **iOS 15.2.1**, rootless **Dopamine** jailbreak.
