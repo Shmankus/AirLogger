@@ -24,8 +24,12 @@ static const char *kChangedNotification = "com.shmank.carriertext/changed";
 static NSString *const kCLIPath = @"/var/jb/usr/bin/carriertext";
 
 static const NSTimeInterval kCountsStale = 5.0;  // no counts for this long = scanning paused
-static const NSTimeInterval kTrackFresh = 4.0;   // readings newer than this count as live
-static const NSTimeInterval kTrackLost = 12.0;   // no reading for this long = lost
+// Readings within this long of the newest one form the current batch (a Wi-Fi
+// scan reports all of a network's APs at once; BLE arrives several times a
+// second). The batch's strongest is shown until nothing new arrives for
+// kTrackLost, which must outlast the ~6s Wi-Fi scan interval.
+static const NSTimeInterval kTrackBatch = 4.0;
+static const NSTimeInterval kTrackLost = 15.0;
 static const NSUInteger kMaxNameLength = 10;
 
 extern char **environ;
@@ -35,7 +39,6 @@ extern char **environ;
 @property (nonatomic, readwrite, copy) NSString *trackedName;
 @property (nonatomic, strong) NSSet<NSString *> *trackedIDs;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSArray *> *trackReadings; // id -> @[rssi, date]
-@property (nonatomic, strong) NSDate *trackStarted;
 
 @property (nonatomic) NSUInteger wifiCount, bleCount, classicCount;
 @property (nonatomic, strong) NSDate *countsAt;
@@ -89,7 +92,6 @@ extern char **environ;
 	self.trackedIDs = ids;
 	self.trackedName = d.displayName;
 	self.trackReadings = [NSMutableDictionary dictionary];
-	self.trackStarted = [NSDate date];
 	// Seed with the reading the screen was showing.
 	for (ALDevice *ap in (d.children.count ? d.children : @[d]))
 		if (ap.rssi < 0 && ap.identifier) self.trackReadings[ap.identifier] = @[@(ap.rssi), ap.lastSeen ?: [NSDate date]];
@@ -156,19 +158,20 @@ static NSString *bars(NSInteger rssi) {
 							  : shorten(c.displayName, 16);
 		}
 		case ALStatusBarModeTracking: {
-			// Strongest fresh reading across the tracked APs / device.
-			NSInteger best = 0; NSDate *latest = nil;
-			for (NSArray *r in self.trackReadings.allValues) {
-				NSDate *at = r[1];
-				if (!latest || [at compare:latest] == NSOrderedDescending) latest = at;
-				if (-at.timeIntervalSinceNow <= kTrackFresh && (best == 0 || [r[0] integerValue] > best))
-					best = [r[0] integerValue];
-			}
 			NSString *name = shorten(self.trackedName, kMaxNameLength);
-			NSTimeInterval since = latest ? -latest.timeIntervalSinceNow : -self.trackStarted.timeIntervalSinceNow;
-			if (best < 0) return [NSString stringWithFormat:@"%@ %ld %@", bars(best), (long)best, name];
-			if (since > kTrackLost) return [NSString stringWithFormat:@"···· lost %@", name];
-			return [NSString stringWithFormat:@"···· ?? %@", name]; // between readings
+			NSDate *latest = nil;
+			for (NSArray *r in self.trackReadings.allValues)
+				if (!latest || [r[1] compare:latest] == NSOrderedDescending) latest = r[1];
+			if (!latest || -latest.timeIntervalSinceNow > kTrackLost)
+				return [NSString stringWithFormat:@"···· lost %@", name];
+
+			// Strongest reading in the newest batch, across the tracked APs / device.
+			NSInteger best = 0;
+			for (NSArray *r in self.trackReadings.allValues) {
+				if ([latest timeIntervalSinceDate:r[1]] > kTrackBatch) continue;
+				if (best == 0 || [r[0] integerValue] > best) best = [r[0] integerValue];
+			}
+			return [NSString stringWithFormat:@"%@ %ld %@", bars(best), (long)best, name];
 		}
 	}
 	return nil;
