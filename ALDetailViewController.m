@@ -13,6 +13,7 @@
 #import "ALDatabase.h"
 #import "ALWiFiJoin.h"
 #import "ALAppDelegate.h"
+#import "ALStatusBar.h"
 
 @interface ALDetailViewController ()
 @property (nonatomic, strong) ALDevice *device;
@@ -123,6 +124,8 @@
 
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildGroups)
 												 name:ALWiFiJoinStateChangedNotification object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildGroups)
+												 name:ALStatusBarModeChangedNotification object:nil];
 	[self buildHeader];
 }
 
@@ -142,6 +145,12 @@
 	else if ([ALWiFiJoin isOpen:self.device])
 		[groups addObject:@{@"title": @"Open network", @"rows":
 			@[@[@"Can't join", @"Hidden network (no name to join by)"]]}];
+	// Live signal in the status bar (classic BT has no RSSI, so it's left out).
+	if (self.device.type != ALDeviceTypeClassicBT) {
+		BOOL tracking = [[ALStatusBar shared] isTracking:self.device];
+		[groups addObject:@{@"title": @"", @"rows": @[@[tracking ? @"Stop Tracking" : @"Track in Status Bar", @""]],
+							@"action": tracking ? @"untrack" : @"track"}];
+	}
 	[groups addObjectsFromArray:self.baseGroups];
 	self.groups = groups;
 	[self.tableView reloadData];
@@ -253,6 +262,8 @@
 	NSString *action = self.groups[ip.section][@"action"];
 	if ([action isEqualToString:@"join"]) [ALWiFiJoin join:self.device from:self];
 	else if ([action isEqualToString:@"leave"]) [ALWiFiJoin leave:self.device from:self];
+	else if ([action isEqualToString:@"track"]) [[ALStatusBar shared] trackDevice:self.device];
+	else if ([action isEqualToString:@"untrack"]) [[ALStatusBar shared] setMode:ALStatusBarModeOff];
 	else if ([action isEqualToString:@"map"]) [ALAppDelegate showOnMap:self.mapIdentifier];
 }
 

@@ -18,6 +18,7 @@
 #import "ALLocationProvider.h"
 #import "ALSpeedTest.h"
 #import "ALWiFiJoin.h"
+#import "ALStatusBar.h"
 
 // "Live" mode shows only devices seen within this window (longer than the ~6s
 // Wi-Fi scan cycle so present APs don't flicker out); "Session" shows all found.
@@ -88,6 +89,12 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		target:self
 		action:@selector(toggleScan)];
 
+
+	// Status bar (CarrierText tweak) mode picker.
+	self.navigationItem.leftBarButtonItem =
+		[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"text.bubble"] menu:[self statusBarMenu]];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(statusBarModeChanged)
+												 name:ALStatusBarModeChangedNotification object:nil];
 
 	// on boot start location service but do not start scan yet
 	[self buildSummaryHeader];
@@ -371,6 +378,8 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	self.speedTest.onProgress = ^(ALSpeedTestPhase phase, double mbps) {
 		weakSelf.connSpeedLabel.text = [NSString stringWithFormat:@"Testing %@…  %.1f Mbps",
 										phase == ALSpeedTestPhaseDownload ? @"download" : @"upload", mbps];
+		[[ALStatusBar shared] showTransient:[NSString stringWithFormat:@"%@ %.0f Mbps",
+											 phase == ALSpeedTestPhaseDownload ? @"↓" : @"↑", mbps] duration:3];
 	};
 	self.speedTest.onComplete = ^(double down, double up, NSError *error) {
 		typeof(self) strongSelf = weakSelf;
@@ -380,6 +389,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 			strongSelf.connSpeedLabel.textColor = [UIColor systemRedColor];
 			strongSelf.connSpeedLabel.text = [@"Speed test failed: " stringByAppendingString:error.localizedDescription];
 		} else {
+			[[ALStatusBar shared] showTransient:[NSString stringWithFormat:@"↓%.0f ↑%.0f Mbps", down, up] duration:15];
 			[[ALDatabase shared] recordSpeedTestForIdentifier:ap.identifier ssid:ap.name down:down up:up];
 			// Log the AP as a sighting too, so it's in All Devices even if it hasn't
 			// been scanned yet. Skip if the RSSI is missing: a 0 dBm row would look
@@ -391,6 +401,38 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		if (!error) [strongSelf refreshConnection];
 	};
 	[self.speedTest start];
+}
+
+#pragma mark - Status bar text
+
+- (UIMenu *)statusBarMenu {
+	ALStatusBar *sb = [ALStatusBar shared];
+	NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
+	NSArray *titles = @[@"Off", @"Nearby Counts", @"Connected Wi-Fi"];
+	NSArray *symbols = @[@"xmark", @"number", @"wifi"];
+	for (NSInteger m = ALStatusBarModeOff; m <= ALStatusBarModeConnectedWiFi; m++) {
+		UIAction *a = [UIAction actionWithTitle:titles[m] image:[UIImage systemImageNamed:symbols[m]]
+									 identifier:nil handler:^(__kindof UIAction *action) {
+			[[ALStatusBar shared] setMode:(ALStatusBarMode)m];
+		}];
+		a.state = (sb.mode == m) ? UIMenuElementStateOn : UIMenuElementStateOff;
+		[items addObject:a];
+	}
+	if (sb.mode == ALStatusBarModeTracking) {
+		UIAction *t = [UIAction actionWithTitle:[NSString stringWithFormat:@"Tracking %@", sb.trackedName]
+										  image:[UIImage systemImageNamed:@"scope"] identifier:nil
+										handler:^(__kindof UIAction *action) {}];
+		t.state = UIMenuElementStateOn;
+		[items addObject:t];
+	}
+	return [UIMenu menuWithTitle:@"Status Bar Text (off clears it)" children:items];
+}
+
+- (void)statusBarModeChanged {
+	UIBarButtonItem *b = self.navigationItem.leftBarButtonItem;
+	b.menu = [self statusBarMenu];
+	b.image = [UIImage systemImageNamed:([ALStatusBar shared].mode == ALStatusBarModeOff
+										 ? @"text.bubble" : @"text.bubble.fill")];
 }
 
 - (void)modeChanged:(UISegmentedControl *)sender {
@@ -479,6 +521,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		self.store[key] = d;
 	}
 	[[ALDatabase shared] recordDevice:(existing ?: d) location:[ALLocationProvider shared].currentLocation];
+	[[ALStatusBar shared] noteDevice:d];
 }
 
 - (void)rebuildAndReload {
@@ -547,6 +590,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	[ble sortUsingComparator:byRSSI];
 	[classic sortUsingComparator:byRSSI];
 	self.sections = @[wifiRows, ble, classic];
+	[[ALStatusBar shared] noteCountsWiFi:wifiRows.count ble:ble.count classic:classic.count];
 	[self updateSummary];
 	[self.tableView reloadData];
 }

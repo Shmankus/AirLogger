@@ -204,6 +204,19 @@ ALWiFiIE                parses the scan result's "IE" property (raw CFData, [id]
                         width, spatial streams, BSS Load (clients, utilization), country,
                         WPS attributes (make, model, device name, primary device type →
                         Device Kind), Wi-Fi Direct / Hotspot 2.0, vendor-element OUIs
+ALStatusBar             status-bar carrier text via the user's CarrierText tweak
+                        (com.shmank.carriertext): writes CarrierText into
+                        /var/jb/var/mobile/Library/Preferences/com.shmank.carriertext.plist
+                        (other keys: LoopTexts/LoopDelay) + notify_post
+                        "com.shmank.carriertext/changed" (verified: the sandbox allows this
+                        write); falls back to spawning the `carriertext` CLI if the write
+                        is refused. Needs the tweak installed — without CarrierText.dylib
+                        the status bar just shows the real carrier. Modes: nearby counts,
+                        connected Wi-Fi, tracking one device's live RSSI (from the detail
+                        page), plus speed-test transients. Picked from the Current tab's
+                        left bar button; off sets the text to "" (like `carriertext set ""`,
+                        carrier name hidden). Not persisted; if the app is killed while on,
+                        the last text stays until changed with `carriertext`
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
                         focusPin(id) centers + opens a popup; popup "View Details"
