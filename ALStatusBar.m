@@ -8,6 +8,7 @@
 //  sandbox refuses the write, it falls back to running the CLI.
 //
 //  A 1s tick renders the current mode's text and writes it only when it changed.
+//  Turning it off sets the text to "" (carrier name hidden).
 //
 
 #import "ALStatusBar.h"
@@ -46,7 +47,6 @@ extern char **environ;
 @property (nonatomic, copy) NSString *transient;
 @property (nonatomic, strong) NSDate *transientUntil;
 
-@property (nonatomic, strong) NSDictionary *originalPrefs; // restored when turned off
 @property (nonatomic, copy) NSString *lastWritten;
 @property (nonatomic, strong) NSTimer *timer;
 @end
@@ -69,8 +69,6 @@ extern char **environ;
 	ALStatusBarMode old = _mode;
 	_mode = mode;
 	if (old == ALStatusBarModeOff && mode != ALStatusBarModeOff) {
-		// Remember the user's own setting (text or loop) to put back later.
-		self.originalPrefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath] ?: @{};
 		self.lastWritten = nil;
 		self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(tick)
 													userInfo:nil repeats:YES];
@@ -78,8 +76,8 @@ extern char **environ;
 		[self.timer invalidate];
 		self.timer = nil;
 		self.transient = nil;
-		[self writePrefs:self.originalPrefs];
-		ALLog(@"statusbar: off, restored previous carrier text");
+		[self writeText:@""]; // same as `carriertext set ""`: carrier name hidden
+		ALLog(@"statusbar: off, cleared carrier text");
 	}
 	ALLog(@"statusbar: mode %ld", (long)mode);
 	[self tick];
@@ -182,14 +180,20 @@ static NSString *bars(NSInteger rssi) {
 	NSString *text = [self render];
 	if (!text || [text isEqualToString:self.lastWritten]) return;
 	self.lastWritten = text;
+	[self writeText:text];
+}
 
-	NSMutableDictionary *prefs = [self.originalPrefs mutableCopy] ?: [NSMutableDictionary dictionary];
+#pragma mark - Writing
+
+// Like `carriertext set <text>`: sets CarrierText and drops any loop, keeping
+// whatever other keys the file has.
+- (void)writeText:(NSString *)text {
+	NSMutableDictionary *prefs = [[NSDictionary dictionaryWithContentsOfFile:kPrefsPath] mutableCopy]
+		?: [NSMutableDictionary dictionary];
 	[prefs removeObjectsForKeys:@[@"CarrierText", @"LoopTexts", @"LoopDelay"]];
 	prefs[@"CarrierText"] = text;
 	[self writePrefs:prefs];
 }
-
-#pragma mark - Writing
 
 - (void)writePrefs:(NSDictionary *)prefs {
 	NSError *err = nil;

@@ -214,9 +214,9 @@ ALStatusBar             status-bar carrier text via the user's CarrierText tweak
                         the status bar just shows the real carrier. Modes: nearby counts,
                         connected Wi-Fi, tracking one device's live RSSI (from the detail
                         page), plus speed-test transients. Picked from the Current tab's
-                        left bar button; off restores the user's previous setting (captured
-                        when turned on). Not persisted; if the app is killed while on, the
-                        last text stays until `carriertext reset`
+                        left bar button; off sets the text to "" (like `carriertext set ""`,
+                        carrier name hidden). Not persisted; if the app is killed while on,
+                        the last text stays until changed with `carriertext`
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
                         focusPin(id) centers + opens a popup; popup "View Details"

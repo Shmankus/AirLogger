@@ -425,7 +425,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 		t.state = UIMenuElementStateOn;
 		[items addObject:t];
 	}
-	return [UIMenu menuWithTitle:@"Status Bar Text (off restores yours)" children:items];
+	return [UIMenu menuWithTitle:@"Status Bar Text (off clears it)" children:items];
 }
 
 - (void)statusBarModeChanged {

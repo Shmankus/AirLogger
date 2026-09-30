@@ -3,7 +3,7 @@
 
 // Live status in the status bar's carrier text, via the CarrierText tweak
 // (com.shmank.carriertext). Nothing is written until a mode is picked; turning
-// it off restores whatever carrier text setting was there before.
+// it off clears the text (like `carriertext set ""`).
 typedef NS_ENUM(NSInteger, ALStatusBarMode) {
 	ALStatusBarModeOff = 0,
 	ALStatusBarModeCounts,        // "W18 L29 C2": devices in range per type
