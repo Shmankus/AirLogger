@@ -14,10 +14,13 @@ include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = AirLogger
 AirLogger_RESOURCES_FOLDER = Resources
-AirLogger_FILES = main.m ALAppDelegate.m ALDevice.m ALWiFiScanner.m ALBluetoothScanner.m ALDatabase.m ALLocationProvider.m ALDeviceCell.m ALRootViewController.m ALDetailViewController.m ALHistoryViewController.m ALMapViewController.m ALSpeedTest.m ALWiFiJoin.m ALVendor.m ALAdvDecoder.m ALWiFiIE.m ALStatusBar.m
+# Sources/<Category>/*.m — every folder is also on the include path, so imports
+# stay flat (#import "ALDevice.h") and new files are picked up automatically.
+SOURCE_DIRS = $(wildcard Sources/*)
+AirLogger_FILES = $(wildcard Sources/*/*.m)
 AirLogger_FRAMEWORKS = UIKit Foundation CoreFoundation CoreBluetooth CoreLocation MapKit WebKit NetworkExtension
 AirLogger_LIBRARIES = sqlite3
-AirLogger_CFLAGS = -fobjc-arc
+AirLogger_CFLAGS = -fobjc-arc $(addprefix -I,$(SOURCE_DIRS))
 AirLogger_CODESIGN_FLAGS = -Sentitlements.plist
 
 include $(THEOS_MAKE_PATH)/application.mk

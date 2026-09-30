@@ -137,28 +137,42 @@ The app installs to `/var/jb/Applications/AirLogger.app`. Entitlements are defin
 ## Project structure
 
 ```
-ALWiFiScanner           Wi-Fi scanning, join (associate) and leave via the private
-                        MobileWiFi API (dlopen/dlsym); saved-network lookup
-ALWiFiIE                Parser for Wi-Fi beacon information elements (generation, WPS…)
-ALBluetoothScanner      Classic Bluetooth via BluetoothManager; BLE via CoreBluetooth
-ALAdvDecoder            BLE advertisement decoder (Apple, Microsoft, Google, Samsung…)
-ALVendor                Manufacturer lookup: MAC OUI and Bluetooth SIG company IDs
-ALLocationProvider      Core Location wrapper (foreground + background)
-ALDatabase              SQLite store for GPS-tagged sightings + latest speed test per AP
-ALDevice                Unified device model
-ALDeviceCell            Custom list cell (type icon, signal pill, open/saved badge)
-ALRootViewController    "Current" tab — live list with a Wi-Fi/BLE/Classic picker, the
-                        connected Wi-Fi card, speed test, and the status-bar menu
-ALHistoryViewController "All" tab — full stored history with search + type filter
-ALDetailViewController  Per-device field breakdown + Join/Disconnect, Track, Show on Map
-ALSpeedTest             Wi-Fi download/upload throughput test (Cloudflare endpoints)
-ALWiFiJoin              Open/saved-network detection, joining and disconnecting
-ALStatusBar             Live status-bar text through the CarrierText tweak
-ALMapViewController     "Map" tab — WKWebView + Leaflet map, position estimation
-Resources/map.html      The Leaflet map page (edit freely; data arrives via updateData())
-Resources/oui.txt       MAC prefix → manufacturer (from Wireshark's manuf list)
-Resources/company_ids.txt  Bluetooth SIG company ID → name
+Sources/
+  App/
+    main.m                  Entry point
+    ALAppDelegate           Tab bar (Current / All / Map) and cross-tab navigation
+    ALLog.h                 File logger (iOS has no `log` CLI)
+  UI/
+    ALRootViewController    "Current" tab — live list with a Wi-Fi/BLE/Classic picker, the
+                            connected Wi-Fi card, speed test, and the status-bar menu
+    ALHistoryViewController "All" tab — full stored history with search + type filter
+    ALDetailViewController  Per-device field breakdown + Join/Disconnect, Track, Show on Map
+    ALMapViewController     "Map" tab — WKWebView + Leaflet map, position estimation
+    ALDeviceCell            Custom list cell (type icon, signal pill, open/saved badge)
+  Scanning/
+    ALWiFiScanner           Wi-Fi scanning, join (associate) and leave via the private
+                            MobileWiFi API (dlopen/dlsym); saved-network lookup
+    ALBluetoothScanner      Classic Bluetooth via BluetoothManager; BLE via CoreBluetooth
+    ALLocationProvider      Core Location wrapper (foreground + background)
+  Processing/
+    ALAdvDecoder            BLE advertisement decoder (Apple, Microsoft, Google, Samsung…)
+    ALWiFiIE                Parser for Wi-Fi beacon information elements (generation, WPS…)
+    ALVendor                Manufacturer lookup: MAC OUI and Bluetooth SIG company IDs
+  Data/
+    ALDatabase              SQLite store for GPS-tagged sightings + latest speed test per AP
+    ALDevice                Unified device model
+  Actions/
+    ALWiFiJoin              Open/saved-network detection, joining and disconnecting
+    ALSpeedTest             Wi-Fi download/upload throughput test (Cloudflare endpoints)
+    ALStatusBar             Live status-bar text through the CarrierText tweak
+Resources/
+  map.html                  The Leaflet map page (edit freely; data arrives via updateData())
+  oui.txt                   MAC prefix → manufacturer (from Wireshark's manuf list)
+  company_ids.txt           Bluetooth SIG company ID → name
 ```
+
+The Makefile builds every `Sources/*/*.m` and adds each folder to the include path, so a
+new file just goes in the right folder.
 
 ## Limitations & honest notes
 

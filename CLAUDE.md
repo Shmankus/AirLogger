@@ -158,6 +158,23 @@ use `class_copyMethodList` / `class_copyPropertyList` at runtime and read each v
 
 ## Architecture / file map
 
+Sources live in `Sources/<Category>/`. The Makefile compiles `Sources/*/*.m` and puts
+every folder on the include path, so imports stay flat (`#import "ALDevice.h"`) and a new
+file only needs to be dropped in the right folder — no Makefile edit.
+
+```
+Sources/App/            main.m, ALAppDelegate, ALLog.h         entry, tabs, cross-tab nav, logging
+Sources/UI/             ALRootViewController, ALHistoryViewController, ALDetailViewController,
+                        ALMapViewController, ALDeviceCell      screens + list cell
+Sources/Scanning/       ALWiFiScanner, ALBluetoothScanner, ALLocationProvider   radios + GPS
+Sources/Processing/     ALAdvDecoder, ALWiFiIE, ALVendor       decoding + manufacturer lookup
+Sources/Data/           ALDatabase, ALDevice                   SQLite store + device model
+Sources/Actions/        ALWiFiJoin, ALSpeedTest, ALStatusBar   join/leave, speed test, status bar
+Resources/              Info.plist, icon, map.html, oui.txt, company_ids.txt (bundle root)
+```
+
+Per class:
+
 ```
 main.m                  entry point
 ALAppDelegate           UITabBarController: Current (live) / All (history) / Map tabs;
