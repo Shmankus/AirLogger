@@ -1,3 +1,4 @@
+THEOS ?= /opt/theos
 export THEOS_PACKAGE_SCHEME = rootless
 
 # Device config for `make do` / `make install` lives in Makefile.local (gitignored).

@@ -76,8 +76,8 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	self.title = @"Current";
-	self.navigationController.navigationBar.prefersLargeTitles = YES;
+	// No title: the tab bar already says "Current", and a compact bar keeps the list higher.
+	self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
 	self.tableView.backgroundColor = [UIColor systemGroupedBackgroundColor];
 	self.tableView.separatorInset = UIEdgeInsetsMake(0, 62, 0, 0);
 	[self.tableView registerClass:[ALDeviceCell class] forCellReuseIdentifier:@"dev"];
