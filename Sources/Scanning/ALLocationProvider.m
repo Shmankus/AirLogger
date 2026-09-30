@@ -39,7 +39,9 @@
 	// Keep scanning alive with the screen off / app backgrounded.
 	self.manager.pausesLocationUpdatesAutomatically = NO;
 	@try { self.manager.allowsBackgroundLocationUpdates = YES; } @catch (__unused id e) {}
-	if (@available(iOS 11.0, *)) self.manager.showsBackgroundLocationIndicator = YES;
+	// No blue background-location bar; the status bar's location arrow still shows.
+	// iOS only honors NO with "Always" authorization — under "While Using" the bar is forced.
+	if (@available(iOS 11.0, *)) self.manager.showsBackgroundLocationIndicator = NO;
 	[self.manager requestAlwaysAuthorization];
 	[self.manager requestWhenInUseAuthorization];
 	[self.manager startUpdatingLocation];
