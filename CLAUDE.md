@@ -116,8 +116,18 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
     (**CartoDB dark tiles now require an API key** — don't use them).
   - The app **does** have outbound network (verified) — WKWebView loads Leaflet from a CDN
     and tiles from OSM fine.
-  - Leaflet `bringToFront()` on a canvas-rendered marker throws `t.parentNode` — avoid it;
-    draw circles then markers in separate passes instead.
+  - Leaflet `bringToFront()` on a canvas-rendered marker throws `t.parentNode` — avoid it.
+    The map uses `preferCanvas` (device dots on one canvas); the user's dot lives in its own
+    SVG pane (`user`, z-index 650) so it stays on top without `bringToFront`.
+  - **Rendering cost is bounded on purpose** (it was hurting framerate/battery): only pins
+    inside the viewport (+25%) get a marker, below zoom 18 nearby pins merge into a counted
+    cluster bubble (tap → zoom in), and the easing `requestAnimationFrame` loop runs only
+    while a dot is still moving. `render()` runs on `moveend` and after each `updateData`,
+    never per frame — keep per-frame work out of the page.
+  - **Clustering is hierarchical over all pins** (`buildClusters`, supercluster-style: each
+    zoom level greedily merges the level above within 50px), and culling happens *after*.
+    An earlier version grid-binned only the on-screen pins, so counts changed while panning
+    and a bubble could hold dots visually nearer another — don't cluster post-cull.
   - `map.html` start-location placeholders are `__LAT__` / `__LON__` (valid JS identifiers),
     NOT `{{LAT}}` mustache tokens — an HTML/JS formatter rewrites `{{ }}` into `{ }` object
     literals, which is a parse error that kills the whole script (updateData undefined).
@@ -264,7 +274,13 @@ ALStatusBar             status-bar carrier text via the user's CarrierText tweak
                         the last text stays until changed with `carriertext`
 ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
 Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
-                        focusPin(id) centers + opens a popup; popup "View Details"
+                        clusters all pins per zoom (buildClusters), draws the viewport (render());
+                        focusPin(id) zooms to 18 (unclustered), centers + opens a popup; popup
+                        shows "N dots stacked here" (pins within 3 m overlap even at max
+                        zoom — why a "6" bubble can open to one visible dot) and Prev/Next,
+                        which walk all pins by distance from the dot the walk started on
+                        (order fixed while walking; a direct tap starts a new walk);
+                        popup content is only built while open; "View Details"
                         posts the id to the `detail` message handler. A focused pin
                         (focusId) bypasses the map filters until refresh/filter change
 ALLog.h                 file logger (no `log` CLI on iOS)

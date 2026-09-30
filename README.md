@@ -82,9 +82,12 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   the password stored in Settings). While connected, the detail page offers **Disconnect
   from Network** instead, and reports if you'd already dropped off or iOS auto‑rejoined.
 - **Interactive dark map** — an OpenStreetMap slippy map (Leaflet) with color‑coded,
-  tappable pins that update live and animate smoothly toward refined positions. Filter by
+  tappable pins that update live and animate smoothly toward refined positions. Dense
+  areas merge into counted clusters that split apart as you zoom in, and only pins on
+  screen are drawn, so it stays smooth with thousands of devices logged. Filter by
   type, band and security. **Show on Map** on a detail page jumps to that device's pin; a
-  pin's popup has **View Details** to jump back.
+  pin's popup has **View Details** to jump back, and **Prev / Next** to step through the
+  nearest pins in order of distance (handy where several devices' dots overlap).
 - **Status‑bar readout** — with the companion CarrierText tweak installed, the carrier
   name can show live info while you use other apps: nearby device counts (`W18 L29 C2`),
   the connected network and its signal, speed‑test progress, or **tracking** one device's
