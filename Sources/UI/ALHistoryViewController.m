@@ -1,10 +1,10 @@
 //
 //  ALHistoryViewController.m — AirLogger
 //
-//  "All" tab. Lists every device ever stored (ALDatabase allDevices), with a
-//  search bar (name or identifier) and a type scope filter (All / Wi-Fi / BLE /
-//  Classic).
-//  Hosts the database-wipe (trash) button.
+//  "All" tab. Lists every device ever stored (ALDatabase allDevices). No title:
+//  a type picker (All / Wi-Fi / BLE / Classic) is the nav bar's title view, with
+//  the search bar (name or identifier) under it, and a sort menu (Name / RSSI /
+//  Latest) on the right. Hosts the database-wipe (trash) button.
 //
 
 #import "ALHistoryViewController.h"
@@ -15,10 +15,24 @@
 #import "ALVendor.h"
 #import "ALAdvDecoder.h"
 
-@interface ALHistoryViewController () <UISearchResultsUpdating, UISearchBarDelegate>
+typedef NS_ENUM(NSInteger, ALHistorySort) {
+	ALHistorySortLatest = 0, // most recently seen first
+	ALHistorySortRSSI,       // strongest ever first; no-RSSI (classic) last
+	ALHistorySortName,       // A→Z; unnamed last
+};
+
+static NSString *const kSortDefaultsKey = @"ALHistorySort";
+
+// Type picker segments. Segment index - 1 == ALDeviceType (0 = All).
+static NSString *const kTypeSegmentTitles[] = { @"All", @"Wi-Fi", @"BLE", @"Classic" };
+static const NSInteger kTypeSegmentCount = 4;
+
+@interface ALHistoryViewController () <UISearchResultsUpdating>
 @property (nonatomic, strong) NSArray<ALDevice *> *all;       // every stored device
 @property (nonatomic, strong) NSArray<ALDevice *> *filtered;  // after search + scope
 @property (nonatomic, strong) UISearchController *search;
+@property (nonatomic, strong) UISegmentedControl *typeControl;
+@property (nonatomic) ALHistorySort sort;
 @end
 
 @implementation ALHistoryViewController
@@ -29,22 +43,37 @@
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	self.title = @"All Devices";
-	self.navigationController.navigationBar.prefersLargeTitles = YES;
+	self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
 	[self.tableView registerClass:[ALDeviceCell class] forCellReuseIdentifier:@"dev"];
+	// Pull the "N devices" header up against the search bar: grouped tables pad
+	// ~35pt above the first section when there's no table header, iOS 15 adds
+	// sectionHeaderTopPadding, and the header itself is tall (see heightForHeader).
+	self.tableView.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, CGFLOAT_MIN)];
+	if (@available(iOS 15.0, *)) self.tableView.sectionHeaderTopPadding = 0;
+
+	NSMutableArray *typeTitles = [NSMutableArray array];
+	for (NSInteger i = 0; i < kTypeSegmentCount; i++) [typeTitles addObject:kTypeSegmentTitles[i]];
+	self.typeControl = [[UISegmentedControl alloc] initWithItems:typeTitles];
+	self.typeControl.selectedSegmentIndex = 0;
+	self.typeControl.frame = CGRectMake(0, 0, 260, 30);
+	[self.typeControl addTarget:self action:@selector(applyFilter) forControlEvents:UIControlEventValueChanged];
+	self.navigationItem.titleView = self.typeControl;
 
 	self.search = [[UISearchController alloc] initWithSearchResultsController:nil];
 	self.search.searchResultsUpdater = self;
 	self.search.obscuresBackgroundDuringPresentation = NO;
-	self.search.searchBar.placeholder = @"Search name or address";
-	self.search.searchBar.scopeButtonTitles = @[@"All", @"Wi-Fi", @"BLE", @"Classic"];
-	self.search.searchBar.delegate = self;
+	self.search.searchBar.placeholder = @"Search name";
 	self.navigationItem.searchController = self.search;
 	self.navigationItem.hidesSearchBarWhenScrolling = NO;
 
 	self.navigationItem.leftBarButtonItem =
 		[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemTrash
 													  target:self action:@selector(confirmWipe)];
+
+	NSInteger saved = [[NSUserDefaults standardUserDefaults] integerForKey:kSortDefaultsKey];
+	self.sort = (saved >= ALHistorySortLatest && saved <= ALHistorySortName) ? saved : ALHistorySortLatest;
+	self.navigationItem.rightBarButtonItem =
+		[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.up.arrow.down"] menu:[self sortMenu]];
 
 	UIRefreshControl *rc = [[UIRefreshControl alloc] init];
 	[rc addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
@@ -92,9 +121,6 @@
 		if (d.type == ALDeviceTypeBLE && !d.info[@"Device Kind"]) [ALAdvDecoder decodeStoredInfo:d.info];
 		[devs addObject:d];
 	}
-	[devs sortUsingComparator:^NSComparisonResult(ALDevice *a, ALDevice *b) {
-		return [b.lastSeen compare:a.lastSeen]; // most recent first
-	}];
 	self.all = devs;
 	[self.refreshControl endRefreshing];
 	[self applyFilter];
@@ -112,13 +138,61 @@
 	}
 }
 
+#pragma mark - Sort
+
+- (UIMenu *)sortMenu {
+	NSArray *titles = @[@"Latest", @"RSSI", @"Name"];
+	NSArray *symbols = @[@"clock", @"antenna.radiowaves.left.and.right", @"textformat"];
+	NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
+	for (NSInteger m = ALHistorySortLatest; m <= ALHistorySortName; m++) {
+		__weak typeof(self) weakSelf = self;
+		UIAction *a = [UIAction actionWithTitle:titles[m] image:[UIImage systemImageNamed:symbols[m]]
+									 identifier:nil handler:^(__kindof UIAction *action) {
+			[weakSelf setSortMode:(ALHistorySort)m];
+		}];
+		a.state = (self.sort == m) ? UIMenuElementStateOn : UIMenuElementStateOff;
+		[items addObject:a];
+	}
+	return [UIMenu menuWithTitle:@"Sort by" children:items];
+}
+
+- (void)setSortMode:(ALHistorySort)sort {
+	self.sort = sort;
+	[[NSUserDefaults standardUserDefaults] setInteger:sort forKey:kSortDefaultsKey];
+	self.navigationItem.rightBarButtonItem.menu = [self sortMenu];
+	[self applyFilter];
+}
+
+- (NSComparator)comparator {
+	NSComparator latest = ^NSComparisonResult(ALDevice *a, ALDevice *b) {
+		return [b.lastSeen compare:a.lastSeen];
+	};
+	switch (self.sort) {
+		case ALHistorySortRSSI:
+			return ^NSComparisonResult(ALDevice *a, ALDevice *b) {
+				// Classic BT is stored with rssi 0 (no RSSI): don't let it rank as strongest.
+				BOOL ha = a.rssi < 0, hb = b.rssi < 0;
+				if (ha != hb) return ha ? NSOrderedAscending : NSOrderedDescending;
+				if (a.rssi != b.rssi) return a.rssi > b.rssi ? NSOrderedAscending : NSOrderedDescending;
+				return latest(a, b);
+			};
+		case ALHistorySortName:
+			return ^NSComparisonResult(ALDevice *a, ALDevice *b) {
+				if ((a.name != nil) != (b.name != nil)) return a.name ? NSOrderedAscending : NSOrderedDescending;
+				NSComparisonResult r = a.name ? [a.name localizedStandardCompare:b.name] : NSOrderedSame;
+				return r != NSOrderedSame ? r : [a.identifier compare:b.identifier];
+			};
+		case ALHistorySortLatest:
+		default:
+			return latest;
+	}
+}
+
+#pragma mark - Filter
+
 - (void)applyFilter {
 	NSString *q = self.search.searchBar.text.lowercaseString;
-	NSInteger scope = self.search.searchBar.selectedScopeButtonIndex; // 0 all, else ALDeviceType + 1
-
-	NSArray *scopeNames = @[@"All", @"Wi-Fi", @"BLE", @"Classic"];
-	self.title = [NSString stringWithFormat:@"%@ Devices",
-				  scopeNames[(scope >= 0 && scope < (NSInteger)scopeNames.count) ? scope : 0]];
+	NSInteger scope = self.typeControl.selectedSegmentIndex; // 0 all, else ALDeviceType + 1
 
 	NSMutableArray *out = [NSMutableArray array];
 	for (ALDevice *d in self.all) {
@@ -128,12 +202,12 @@
 			![d.identifier.lowercaseString containsString:q]) continue;
 		[out addObject:d];
 	}
+	[out sortUsingComparator:[self comparator]];
 	self.filtered = out;
 	[self.tableView reloadData];
 }
 
 - (void)updateSearchResultsForSearchController:(UISearchController *)sc { [self applyFilter]; }
-- (void)searchBar:(UISearchBar *)sb selectedScopeButtonIndexDidChange:(NSInteger)i { [self applyFilter]; }
 
 - (void)confirmWipe {
 	UIAlertController *a = [UIAlertController
@@ -152,6 +226,8 @@
 #pragma mark - Table
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return self.filtered.count; }
+
+- (CGFloat)tableView:(UITableView *)tv heightForHeaderInSection:(NSInteger)s { return 30; }
 
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
 	if (self.filtered.count == self.all.count)
