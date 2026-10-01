@@ -1,23 +1,23 @@
 //
 //  ALMapViewController.m — AirLogger
 //
-//  "Map" tab. MapKit can't render on this device, so the map is a WKWebView
-//  running Leaflet (Resources/map.html) with OSM tiles. Computes each device's
-//  estimated position (RSSI-weighted centroid / least-squares multilateration)
-//  from the database and pushes fresh estimates into the page via updateData().
+//  "Map" tab. A native OSM tile map (ALTileMapView) with the device pins drawn
+//  by ALPinOverlayView. Computes each device's estimated position (RSSI-weighted
+//  centroid / least-squares multilateration) from the database and pushes fresh
+//  estimates to the overlay every few seconds.
 //
 
 #import "ALMapViewController.h"
-#import <WebKit/WebKit.h>
 #import "ALDatabase.h"
 #import "ALLocationProvider.h"
 #import "ALDevice.h"
-#import "ALLog.h"
 #import "ALAppDelegate.h"
+#import "ALTileMapView.h"
+#import "ALPinOverlayView.h"
 
-// MapKit can't render on this device (Maps.app/engine missing), so we draw the
-// map with Leaflet in a WKWebView and push fresh estimates in via JS so pan/zoom
-// and tiles are preserved between updates.
+// MapKit can't render on these devices (Maps.app and its tile engine are removed),
+// and WKWebView can't either on iOS 17 + Dopamine (launchd refuses to start
+// WebContent for jailbreak-installed apps), so the map is drawn natively.
 
 static const double kTxRef = -45.0;      // approx RSSI at 1 m
 static const double kPathLoss = 2.7;     // path-loss exponent
@@ -27,12 +27,12 @@ static const double kPathLoss = 2.7;     // path-loss exponent
 static const double kRecencyTauWiFi = 86400.0;
 static const double kRecencyTauBT = 600.0;
 
-@interface ALMapViewController () <WKNavigationDelegate, WKScriptMessageHandler>
-@property (nonatomic, strong) WKWebView *web;
-@property (nonatomic) BOOL pageReady;
+@interface ALMapViewController () <ALPinOverlayDelegate>
+@property (nonatomic, strong) ALTileMapView *mapView;
+@property (nonatomic, strong) ALPinOverlayView *overlay;
 @property (nonatomic, strong) NSTimer *liveTimer;
 @property (nonatomic, copy) NSString *focusId;   // pin to keep visible + focus (nil = none)
-@property (nonatomic) BOOL focusPending;         // focus once the page is ready
+@property (nonatomic) BOOL focusPending;         // focus once the map is on screen
 
 // Filters
 @property (nonatomic) NSInteger typeFilter;      // -1 = all, else ALDeviceType
@@ -47,21 +47,16 @@ static const double kRecencyTauBT = 600.0;
 	[super viewDidLoad];
 	self.title = @"Map";
 
-	WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
-	WKUserContentController *ucc = [[WKUserContentController alloc] init];
-	[ucc addScriptMessageHandler:self name:@"err"];
-	[ucc addScriptMessageHandler:self name:@"detail"];
-	NSString *hook = @"window.onerror=function(m,s,l,c){try{window.webkit.messageHandlers.err.postMessage(m+' @'+l+':'+c);}catch(e){}};";
-	[ucc addUserScript:[[WKUserScript alloc] initWithSource:hook
-											  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-										   forMainFrameOnly:YES]];
-	cfg.userContentController = ucc;
+	self.mapView = [[ALTileMapView alloc] initWithFrame:self.view.bounds];
+	self.mapView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	[self.view addSubview:self.mapView];
+	self.overlay = [[ALPinOverlayView alloc] initWithMapView:self.mapView];
+	self.overlay.delegate = self;
+	[self.mapView addSubview:self.overlay];
 
-	self.web = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:cfg];
-	self.web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	self.web.navigationDelegate = self;
-	self.web.opaque = NO;
-	[self.view addSubview:self.web];
+	// Start on the user (the first data push then fits the nearby pins).
+	CLLocation *loc = [ALLocationProvider shared].currentLocation;
+	if (loc) [self.mapView setCenterWorld:ALWorldPointForCoordinate(loc.coordinate) zoom:16 animated:NO];
 
 	self.navigationItem.rightBarButtonItem =
 		[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
@@ -73,7 +68,14 @@ static const double kRecencyTauBT = 600.0;
 				 menu:[self buildFilterMenu]];
 	self.navigationItem.leftBarButtonItem = self.filterButton;
 
-	[self loadPage];
+	// With no scroll view under it, iOS 15+ draws the nav bar in its transparent
+	// scroll-edge style over the map; keep the normal blurred background instead.
+	// (The tab bar's equivalent is set for all tabs in ALAppDelegate.)
+	if (@available(iOS 15.0, *)) {
+		UINavigationBarAppearance *nav = [[UINavigationBarAppearance alloc] init];
+		[nav configureWithDefaultBackground];
+		self.navigationItem.scrollEdgeAppearance = nav;
+	}
 }
 
 #pragma mark - Filters
@@ -142,10 +144,16 @@ static const double kRecencyTauBT = 600.0;
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
-	[self pushData];
 	self.liveTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
 													  target:self selector:@selector(pushData)
 													userInfo:nil repeats:YES];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+	[super viewDidAppear:animated];
+	// First push here, not in viewWillAppear: the initial fit needs the final safe area.
+	[self pushData];
+	[self applyFocus];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -154,36 +162,19 @@ static const double kRecencyTauBT = 600.0;
 	self.liveTimer = nil;
 }
 
-- (NSString *)hexForType:(ALDeviceType)t {
+- (UIColor *)colorForType:(ALDeviceType)t {
 	switch (t) {
-		case ALDeviceTypeWiFi:      return @"#0A84FF";
-		case ALDeviceTypeBLE:       return @"#5E5CE6";
-		case ALDeviceTypeClassicBT: return @"#40C8E0";
+		case ALDeviceTypeWiFi:      return [UIColor colorWithRed:0x0A/255.0 green:0x84/255.0 blue:0xFF/255.0 alpha:1];
+		case ALDeviceTypeBLE:       return [UIColor colorWithRed:0x5E/255.0 green:0x5C/255.0 blue:0xE6/255.0 alpha:1];
+		case ALDeviceTypeClassicBT: return [UIColor colorWithRed:0x40/255.0 green:0xC8/255.0 blue:0xE0/255.0 alpha:1];
 	}
-	return @"#8E8E93";
-}
-
-#pragma mark - Page
-
-- (void)loadPage {
-	CLLocation *loc = [ALLocationProvider shared].currentLocation;
-	double lat = loc ? loc.coordinate.latitude : 0.0;
-	double lon = loc ? loc.coordinate.longitude : 0.0;
-
-	NSString *path = [[NSBundle mainBundle] pathForResource:@"map" ofType:@"html"];
-	NSString *html = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] : nil;
-	if (!html) { ALLog(@"map: map.html missing from bundle"); return; }
-	// Placeholders are valid JS identifiers so an HTML/JS formatter won't mangle them.
-	html = [html stringByReplacingOccurrencesOfString:@"__LAT__" withString:[NSString stringWithFormat:@"%f", lat]];
-	html = [html stringByReplacingOccurrencesOfString:@"__LON__" withString:[NSString stringWithFormat:@"%f", lon]];
-
-	[self.web loadHTMLString:html baseURL:[NSURL URLWithString:@"https://tile.openstreetmap.org/"]];
+	return [UIColor colorWithRed:0x8E/255.0 green:0x8E/255.0 blue:0x93/255.0 alpha:1];
 }
 
 - (void)recenter {
 	// Re-fit the view to the pins on the next push (and drop any focused pin).
 	self.focusId = nil;
-	[self.web evaluateJavaScript:@"didFit=false;" completionHandler:nil];
+	self.overlay.didFit = NO;
 	[self pushData];
 }
 
@@ -195,29 +186,23 @@ static const double kRecencyTauBT = 600.0;
 }
 
 - (void)applyFocus {
-	if (!self.pageReady || !self.focusPending || !self.focusId) return;
+	// Wait until the map has its on-screen size, so the popup can be placed.
+	if (!self.view.window || !self.focusPending || !self.focusId) return;
 	self.focusPending = NO;
 	// Skip the auto-fit, push pins (so the focused one exists), then zoom to it.
-	[self.web evaluateJavaScript:@"didFit=true;" completionHandler:nil];
+	self.overlay.didFit = YES;
 	[self pushData];
-	NSData *j = [NSJSONSerialization dataWithJSONObject:@[self.focusId] options:0 error:nil];
-	NSString *arg = [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding];
-	[self.web evaluateJavaScript:[NSString stringWithFormat:@"focusPin(%@[0]);", arg] completionHandler:nil];
+	[self.overlay focusPin:self.focusId];
 }
 
 #pragma mark - Data push
 
 - (void)pushData {
-	if (!self.pageReady) return;
-	NSString *pinsJSON = [self computePinsJSON];
-	CLLocation *loc = [ALLocationProvider shared].currentLocation;
-	double lat = loc ? loc.coordinate.latitude : 0.0;
-	double lon = loc ? loc.coordinate.longitude : 0.0;
-	NSString *js = [NSString stringWithFormat:@"updateData({u:[%f,%f],pins:%@});", lat, lon, pinsJSON];
-	[self.web evaluateJavaScript:js completionHandler:nil];
+	if (!self.isViewLoaded) return;
+	[self.overlay updateUser:[ALLocationProvider shared].currentLocation pins:[self computePins]];
 }
 
-- (NSString *)computePinsJSON {
+- (NSArray<ALMapPin *> *)computePins {
 	// Group every geotagged observation by device.
 	NSMutableDictionary<NSString *, NSMutableArray *> *groups = [NSMutableDictionary dictionary];
 	NSMutableDictionary<NSString *, NSDictionary *> *meta = [NSMutableDictionary dictionary];
@@ -337,43 +322,26 @@ static const double kRecencyTauBT = 600.0;
 		double elon = mlon + ex / mpd;
 		double radius = n > 1 ? fmax(spread, 12.0) : 40.0;
 
-		NSString *name = [m[@"name"] length] ? m[@"name"] : id_;
-		double ts = [m[@"ts"] doubleValue];
-		[pins addObject:@{
-			@"lat": @(elat), @"lon": @(elon),
-			@"name": name ?: @"", @"id": id_ ?: @"", @"type": [ALDevice nameForType:t],
-			@"rssi": @(best), @"n": @(n),
-			@"radius": @(radius), @"color": [self hexForType:t],
-			@"ts" : @(ts),
-			@"band": band, @"security": sec,
-			@"method": usedMLAT ? @"multilateration" : @"centroid",
-		}];
+		ALMapPin *pin = [[ALMapPin alloc] init];
+		pin.identifier = id_;
+		pin.name = [m[@"name"] length] ? m[@"name"] : id_;
+		pin.typeName = [ALDevice nameForType:t];
+		pin.color = [self colorForType:t];
+		pin.coordinate = CLLocationCoordinate2DMake(elat, elon);
+		pin.rssi = best;
+		pin.observations = (NSInteger)n;
+		pin.radius = radius;
+		pin.lastSeen = [m[@"ts"] doubleValue];
+		pin.method = usedMLAT ? @"multilateration" : @"centroid";
+		[pins addObject:pin];
 	}
-
-	NSData *j = [NSJSONSerialization dataWithJSONObject:pins options:0 error:nil];
-	return j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"[]";
+	return pins;
 }
 
-#pragma mark - Web delegate
+#pragma mark - Overlay delegate
 
-- (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
-	if ([message.name isEqualToString:@"detail"]) {
-		if ([message.body isKindOfClass:[NSString class]])
-			[ALAppDelegate showDetailForIdentifier:message.body];
-		return;
-	}
-	ALLog(@"map(web) JS: %@", message.body);
-}
-- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-	self.pageReady = YES;
-	[self pushData];
-	[self applyFocus];
-}
-- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-	ALLog(@"map(web): didFail: %@", error.localizedDescription);
-}
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-	ALLog(@"map(web): didFailProvisional: %@", error.localizedDescription);
+- (void)pinOverlay:(ALPinOverlayView *)overlay showDetailForIdentifier:(NSString *)identifier {
+	[ALAppDelegate showDetailForIdentifier:identifier];
 }
 
 @end

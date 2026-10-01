@@ -17,7 +17,7 @@ Details for each live in the gotchas and file map below.
 - **All tab:** full history, type picker, search, sort (Latest / RSSI / Name). Counts read "N places".
 - **Detail page:** Identity (Device Kind, OS Family, Manufacturer, Saved in Settings), decoded
   fields; buttons for Join / Disconnect, Track in Status Bar, Show on Map.
-- **Map:** Leaflet in a WKWebView; filters by type/band/security; detail → map focuses a
+- **Map:** native OSM tile map (no MapKit/WebKit); filters by type/band/security; detail → map focuses a
   pin, pin popup "View Details" → All tab detail.
 - **Decoding:** manufacturer via OUI / Bluetooth SIG company ID (ALVendor); BLE Apple
   Continuity / Microsoft / Google / Samsung → device kind + OS, AirPods batteries, AirPlay
@@ -30,7 +30,9 @@ Details for each live in the gotchas and file map below.
 
 ## Target device & environment
 
-- **Device:** iPhone 7 (arm64, A10), **iOS 15.2.1**, rootless **Dopamine** jailbreak.
+- **Devices:** iPhone 7 (arm64, A10), **iOS 15.2.1**, and iPhone XR (A12), **iOS 17.0**
+  (build 21A5312c) — both rootless **Dopamine**. Check `sw_vers` over SSH for which one
+  `Makefile.local` points at.
 - **Build host:** Linux (`shmerver`), Theos at `/opt/theos`, SDK `iPhoneOS16.5.sdk`
   (deployment target 14.0). Always `export THEOS=/opt/theos` before building.
 - **App bundle id:** `com.shmank.airlogger`; installs to `/var/jb/Applications/AirLogger.app`.
@@ -82,8 +84,13 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   `CBCentralManagerScanOptionIsPrivilegedDaemonKey: @YES` (private exports, resolved via
   `dlsym`; honored thanks to the `bluetooth.internal`/`system` entitlements). The session
   then shows `DMN:1` and `didDiscoverPeripheral` delivers with real RSSI.
-- **Debugging daemons:** `oslog` (rootless package) is installed on the device:
-  `oslog --debug -p bluetoothd`. Strip ANSI colours before grepping.
+- **Debugging daemons:** `oslog` (rootless package): `oslog --debug -p bluetoothd`. Strip
+  ANSI colours before grepping. **On iOS 17 it's useless** — every line decodes as
+  `<compose failure [corrupt log]>` — and `ondeviceconsole` needs
+  `/var/run/lockdown/syslog.sock`, which iOS 17 removed. To see a framework's in-process
+  logs there (e.g. WebKit's), read them from inside the app with `OSLogStore`
+  `storeWithScope:1` (current process; the system scope is refused even with
+  `com.apple.logging.local-store`) and write them out with ALLog.
 - **MobileWiFi's `BSSID` string isn't zero-padded** (`18:90:88:9f:63:4`). `ALWiFiScanner`
   runs it through `ALVendor normalizeMAC:`; `ALDatabase normalizeBSSIDs` rewrites old rows
   (and speedtests) at open. Compare/store MACs only in normalized form.
@@ -109,34 +116,39 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   Verify with `ldid -e /var/jb/Applications/AirLogger.app/AirLogger`.
 - **`platform-application` entitlement is intentionally NOT used** — it doesn't help and
   isn't needed (Bluetooth works via the `bluetooth.*` entitlements alone).
-- **MapKit renders nothing** on this device: Maps.app and its tile engine were removed, so
-  `MKMapView` never starts a map session (grey tiles, `loadTileAtPath` never called). The
-  map is therefore a **`WKWebView` running Leaflet** pulling OSM tiles over HTTPS.
-  - Dark theme = OSM tiles + CSS `filter: invert(1) hue-rotate(180deg) ...`
-    (**CartoDB dark tiles now require an API key** — don't use them).
-  - The app **does** have outbound network (verified) — WKWebView loads Leaflet from a CDN
-    and tiles from OSM fine.
-  - Leaflet `bringToFront()` on a canvas-rendered marker throws `t.parentNode` — avoid it.
-    The map uses `preferCanvas` (device dots on one canvas); the user's dot lives in its own
-    SVG pane (`user`, z-index 650) so it stays on top without `bringToFront`.
-  - **Rendering cost is bounded on purpose** (it was hurting framerate/battery): only pins
-    inside the viewport (+25%) get a marker, below zoom 18 nearby pins merge into a counted
-    cluster bubble (tap → zoom in), and the easing `requestAnimationFrame` loop runs only
-    while a dot is still moving. `render()` runs on `moveend` and after each `updateData`,
-    never per frame — keep per-frame work out of the page.
+- **The map is native (ALTileMapView + ALPinOverlayView) — no MapKit, no WebKit.**
+  - **MapKit renders nothing** on these devices: Maps.app and its tile engine were removed,
+    so `MKMapView` never starts a map session (grey tiles, `loadTileAtPath` never called).
+  - **WKWebView can't render on iOS 17 + Dopamine** (the map used to be Leaflet in a
+    WKWebView). launchd refuses to start `com.apple.WebKit.WebContent` for jailbreak-installed
+    apps: `failed to do a bootstrap look-up: xpc_error=[159]` (`launchctl error 159` =
+    "Sandbox restriction"), then `WebProcessProxy::didFinishLaunching: Invalid connection
+    identifier` and `webViewWebContentProcessDidTerminate` ~20 ms after load → black view.
+    **Not fixable from the app:** tried `no-sandbox`, `platform-application`, the
+    `container*`/`sandbox` false keys, Sileo's entire entitlement set, and signing with the
+    real bundle id (`ldid -I`) — all still 159. (Sileo only *looked* like a working control:
+    its package pages are native; no WebContent process ever started for it either.)
+  - Tiles: OSM raster (`tile.openstreetmap.org`, identifying User-Agent per OSM policy,
+    "© OpenStreetMap" label), darkened per pixel with the old CSS filter chain
+    (`invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9)`) folded into one colour
+    matrix (`ALCreateDarkTile`). **CartoDB dark tiles now require an API key** — don't use
+    them. Disk cache: `/var/mobile/Library/AirLogger/tiles` (the container isn't writable).
+    A missing tile shows a cached ancestor's sub-rect until it loads.
+  - **Rendering cost is bounded on purpose** (it hurt framerate/battery): pins are drawn on
+    one canvas view, only pins inside the viewport (+15% canvas pad) are drawn, below zoom 18
+    nearby pins merge into a counted cluster bubble (tap → zoom in), and the easing display
+    link runs only while a dot is still moving. `render` runs when the camera settles and
+    after each data push, never per frame — during a gesture the canvas is only
+    affine-transformed to follow the camera. Keep per-frame work out.
   - **Clustering is hierarchical over all pins** (`buildClusters`, supercluster-style: each
-    zoom level greedily merges the level above within 50px), and culling happens *after*.
+    zoom level greedily merges the level above within 50pt), and culling happens *after*.
     An earlier version grid-binned only the on-screen pins, so counts changed while panning
     and a bubble could hold dots visually nearer another — don't cluster post-cull.
-  - `map.html` start-location placeholders are `__LAT__` / `__LON__` (valid JS identifiers),
-    NOT `{{LAT}}` mustache tokens — an HTML/JS formatter rewrites `{{ }}` into `{ }` object
-    literals, which is a parse error that kills the whole script (updateData undefined).
-    ALMapViewController.loadPage does the string replacement before loadHTMLString.
 - **Current list reloads every 1s**, which would snap an open swipe action shut. Swipe
   state is tracked via `willBeginEditingRowAtIndexPath` / `didEndEditingRowAtIndexPath`
   (`swipeOpen`) and `rebuildAndReload` skips while it's set — keep that if adding actions.
 - **Resources are copied to the bundle root.** `Resources/Info.plist` → `.app/Info.plist`,
-  `Resources/map.html` → `.app/map.html` (found via `pathForResource:@"map"`).
+  `Resources/oui.txt` → `.app/oui.txt`, etc.
 - **Never tear down scanners while running.** Pausing must keep the `ALWiFiScanner` /
   `ALBluetoothScanner` instances alive (stop their timers only, don't `nil` them).
   Deallocating the Wi-Fi scanner while an async `WiFiDeviceClientScanAsync` callback is
@@ -177,11 +189,12 @@ file only needs to be dropped in the right folder — no Makefile edit.
 Sources/App/            main.m, ALAppDelegate, ALLog.h         entry, tabs, cross-tab nav, logging
 Sources/UI/             ALRootViewController, ALHistoryViewController, ALDetailViewController,
                         ALMapViewController, ALDeviceCell      screens + list cell
+Sources/Map/            ALTileMapView, ALPinOverlayView        native tile map + pins
 Sources/Scanning/       ALWiFiScanner, ALBluetoothScanner, ALLocationProvider   radios + GPS
 Sources/Processing/     ALAdvDecoder, ALWiFiIE, ALVendor       decoding + manufacturer lookup
 Sources/Data/           ALDatabase, ALDevice                   SQLite store + device model
 Sources/Actions/        ALWiFiJoin, ALSpeedTest, ALStatusBar   join/leave, speed test, status bar
-Resources/              Info.plist, icon, map.html, oui.txt, company_ids.txt (bundle root)
+Resources/              Info.plist, icon, oui.txt, company_ids.txt (bundle root)
 ```
 
 Per class:
@@ -272,17 +285,24 @@ ALStatusBar             status-bar carrier text via the user's CarrierText tweak
                         left bar button; off sets the text to "" (like `carriertext set ""`,
                         carrier name hidden). Not persisted; if the app is killed while on,
                         the last text stays until changed with `carriertext`
-ALMapViewController     WKWebView + Leaflet; computes position estimates, pushes via JS
-Resources/map.html      Leaflet page; native calls window.updateData({u,pins}) every ~3s;
-                        clusters all pins per zoom (buildClusters), draws the viewport (render());
-                        focusPin(id) zooms to 18 (unclustered), centers + opens a popup; popup
+ALMapViewController     Map tab: computes position estimates (ALMapPin) and pushes them
+                        to the overlay every ~3s; filter menu; refresh re-fits (didFit = NO).
+                        A focused pin (focusId) bypasses the map filters until refresh/filter
+                        change; focus is applied once the view is on screen (viewDidAppear)
+ALTileMapView           slippy map: camera = normalized Web Mercator centre + fractional
+                        zoom (256·2^z pt world, Leaflet's scale); pan with fling, pinch around
+                        the fingers, double-tap in / two-finger-tap out; tiles are CALayers
+                        keyed z/x/y at round(zoom). Delegate: cameraDidChange (per frame),
+                        cameraDidSettle (Leaflet's moveend), didTapAtPoint
+ALPinOverlayView        map delegate; port of the old map.html: entries (cur eases to
+                        target), buildClusters per zoom, render (cull + canvas redraw),
+                        focusPin zooms to 18 (unclustered), centers + opens a popup; popup
                         shows "N dots stacked here" (pins within 3 m overlap even at max
                         zoom — why a "6" bubble can open to one visible dot) and Prev/Next,
                         which walk all pins by distance from the dot the walk started on
                         (order fixed while walking; a direct tap starts a new walk);
-                        popup content is only built while open; "View Details"
-                        posts the id to the `detail` message handler. A focused pin
-                        (focusId) bypasses the map filters until refresh/filter change
+                        popup content is only built while open; "View Details" → delegate
+                        → All tab detail. Only the popup takes touches (hitTest)
 ALLog.h                 file logger (no `log` CLI on iOS)
 entitlements.plist      wifi.* + bluetooth.access/internal/system +
                         com.apple.developer.networking.HotspotConfiguration (joining)
