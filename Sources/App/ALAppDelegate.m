@@ -58,6 +58,14 @@
 													  image:[UIImage systemImageNamed:@"map"] tag:2];
 
 	UITabBarController *tabs = [[UITabBarController alloc] init];
+	// iOS 15+ makes the tab bar transparent while a list isn't scrolled under it, and
+	// that state carries over to the Map tab (which has no list), leaving the bar
+	// see-through over the map. Keep the normal blurred background on every tab.
+	if (@available(iOS 15.0, *)) {
+		UITabBarAppearance *tabLook = [[UITabBarAppearance alloc] init];
+		[tabLook configureWithDefaultBackground];
+		tabs.tabBar.scrollEdgeAppearance = tabLook;
+	}
 	tabs.viewControllers = @[listNav, histNav, mapNav];
 	self.tabs = tabs;
 	self.history = history;

@@ -19,7 +19,7 @@ AirLogger_RESOURCES_FOLDER = Resources
 # stay flat (#import "ALDevice.h") and new files are picked up automatically.
 SOURCE_DIRS = $(wildcard Sources/*)
 AirLogger_FILES = $(wildcard Sources/*/*.m)
-AirLogger_FRAMEWORKS = UIKit Foundation CoreFoundation CoreBluetooth CoreLocation MapKit WebKit NetworkExtension
+AirLogger_FRAMEWORKS = UIKit Foundation CoreFoundation CoreBluetooth CoreLocation NetworkExtension
 AirLogger_LIBRARIES = sqlite3
 AirLogger_CFLAGS = -fobjc-arc $(addprefix -I,$(SOURCE_DIRS))
 AirLogger_CODESIGN_FLAGS = -Sentitlements.plist
