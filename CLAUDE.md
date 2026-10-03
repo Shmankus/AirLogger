@@ -84,13 +84,15 @@ make clean && make do # REQUIRED after editing entitlements.plist (see below)
   `CBCentralManagerScanOptionIsPrivilegedDaemonKey: @YES` (private exports, resolved via
   `dlsym`; honored thanks to the `bluetooth.internal`/`system` entitlements). The session
   then shows `DMN:1` and `didDiscoverPeripheral` delivers with real RSSI.
-- **Debugging daemons:** `oslog` (rootless package): `oslog --debug -p bluetoothd`. Strip
-  ANSI colours before grepping. **On iOS 17 it's useless** — every line decodes as
-  `<compose failure [corrupt log]>` — and `ondeviceconsole` needs
-  `/var/run/lockdown/syslog.sock`, which iOS 17 removed. To see a framework's in-process
-  logs there (e.g. WebKit's), read them from inside the app with `OSLogStore`
-  `storeWithScope:1` (current process; the system scope is refused even with
-  `com.apple.logging.local-store`) and write them out with ALLog.
+- **Debugging daemons:** use the workspace's `syslog` CLI (`../SysLog`):
+  `syslog stream --debug -p bluetoothd`, `syslog show --last 10m -p AirLogger`. It decodes
+  every process's logs on iOS 17, including frameworks inside the app (e.g. WebKit's), so
+  ALLog isn't needed for those. (Until 2026-10-02 this said: `oslog` prints
+  `<compose failure [corrupt log]>` on iOS 17 and `ondeviceconsole` needs the removed
+  `/var/run/lockdown/syslog.sock`, so in-app logs were read with `OSLogStore`
+  `storeWithScope:1`; the system scope is refused even with
+  `com.apple.logging.local-store`.) On the iOS 15 iPhone 7, `oslog --debug -p bluetoothd`
+  also works (strip ANSI colours before grepping).
 - **MobileWiFi's `BSSID` string isn't zero-padded** (`18:90:88:9f:63:4`). `ALWiFiScanner`
   runs it through `ALVendor normalizeMAC:`; `ALDatabase normalizeBSSIDs` rewrites old rows
   (and speedtests) at open. Compare/store MACs only in normalized form.
