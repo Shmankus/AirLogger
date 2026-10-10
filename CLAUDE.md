@@ -13,11 +13,11 @@ Details for each live in the gotchas and file map below.
   Classic Bluetooth (BluetoothManager, no RSSI). GPS-tagged into SQLite with bounded storage.
 - **Current tab:** no title; Live/Session toggle in the nav bar, compact connected Wi-Fi
   card with speed test, pinned Wi-Fi / BLE / Classic type picker with counts + a small
-  "N nearby now · Scanning" line; swipe to join. Counts read "N heard".
-- **All tab:** full history, type picker, search, sort (Latest / RSSI / Name). Counts read "N places".
+  "N nearby now · Scanning" line; swipe to join; filter button (Hide Unnamed, default on). Counts read "N heard".
+- **All tab:** full history, type picker, search, sort (Latest / RSSI / Name) + Hide Unnamed. Counts read "N places".
 - **Detail page:** Identity (Device Kind, OS Family, Manufacturer, Saved in Settings), decoded
   fields; buttons for Join / Disconnect, Track in Status Bar, Show on Map.
-- **Map:** native OSM tile map (no MapKit/WebKit); filters by type/band/security; detail → map focuses a
+- **Map:** native OSM tile map (no MapKit/WebKit); filters by name/type/band/security; detail → map focuses a
   pin, pin popup "View Details" → All tab detail.
 - **Decoding:** manufacturer via OUI / Bluetooth SIG company ID (ALVendor); BLE Apple
   Continuity / Microsoft / Google / Samsung → device kind + OS, AirPods batteries, AirPlay
@@ -356,6 +356,12 @@ entitlements.plist      wifi.* + bluetooth.access/internal/system +
   by Type (Wi-Fi/BLE/Classic Bluetooth), Band (2.4/5/6 GHz), and Security (Open/WEP/WPA·WPA2/WPA3),
   applied natively in `computePinsJSON` before pushing. Band/security come from each
   device's stored `info` JSON via `allDevices`; security match is prefix-based.
+- **Hide Unnamed** (2026-10-10): one shared filter, **on by default**
+  (`+[ALDevice hideUnnamed]`, NSUserDefaults `ALHideUnnamed`, posts
+  `ALHideUnnamedChangedNotification` so every tab refreshes). Toggles: Current tab's filter
+  button (next to pause; `rightBarButtonItem` stays pause), All tab's sort menu, Map filter
+  menu ("Name" section). Hides devices with an empty name (hidden SSIDs, nameless BLE/Classic);
+  the Current tab's counts include named devices only; a focused map pin bypasses it.
 
 ## Conventions
 
