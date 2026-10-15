@@ -357,6 +357,23 @@ entitlements.plist      wifi.* + bluetooth.access/internal/system +
   applied natively in `computePinsJSON` before pushing. Band/security come from each
   device's stored `info` JSON via `allDevices`; security match is prefix-based.
 
+## Later
+
+- **NFC tag reading** (parked 2026-10-14, nothing built or verified yet). The XR's A12 can
+  read NFC tags. The idea is to log tags like the other radios: UID, tag type (MIFARE, ISO
+  7816, ISO 15693, FeliCa), NDEF records, time and GPS fix, in a new table with its own tab
+  and map pins. The plan is public CoreNFC (`NFCTagReaderSession` with
+  `NFCPollingISO14443 | ISO15693 | ISO18092`), which needs:
+  - the `com.apple.developer.nfc.readersession.formats` entitlement (`TAG`, `NDEF`), added
+    with ldid (then `make clean`). ISO 7816 tags also need
+    `com.apple.developer.nfc.readersession.iso7816.select-identifiers` in Info.plist
+  - `NFCReaderUsageDescription` in `Resources/Info.plist`
+  - a foreground app. Each scan opens the system "Ready to Scan" sheet, which closes after
+    about 60 s or the first tag, so it's a "Scan NFC" button rather than background logging.
+  Things to check first: whether `nfcd` accepts an ldid-signed app in `/var/jb/Applications`
+  (debloat may have disabled `nfcd`), and whether a private `NearField` path allows reading
+  without the sheet. The same reader code serves the "NFC triggers" idea in `../IDEAS.md`.
+
 ## Conventions
 
 - Objective-C, ARC (`-fobjc-arc`), `AL` class prefix, tabs for indentation.
