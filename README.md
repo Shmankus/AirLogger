@@ -81,6 +81,9 @@ _Add screenshots here — e.g. the Current scan list, the All/search tab, a devi
   swiping in the Current tab or tapping **Join Network** on the detail page (saved ones use
   the password stored in Settings). While connected, the detail page offers **Disconnect
   from Network** instead, and reports if you'd already dropped off or iOS auto‑rejoined.
+- **Hide unnamed devices** — on by default: hidden Wi‑Fi networks and Bluetooth devices
+  without a name are left out of every list and the map. Toggle it from the filter button
+  on the Current tab, the sort menu on the All tab, or the map's filter menu.
 - **Interactive dark map** — an OpenStreetMap slippy map (Leaflet) with color‑coded,
   tappable pins that update live and animate smoothly toward refined positions. Dense
   areas merge into counted clusters that split apart as you zoom in, and only pins on

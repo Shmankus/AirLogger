@@ -8,7 +8,20 @@
 
 #import "ALDevice.h"
 
+NSString *const ALHideUnnamedChangedNotification = @"ALHideUnnamedChanged";
+static NSString *const kHideUnnamedKey = @"ALHideUnnamed";
+
 @implementation ALDevice
+
++ (BOOL)hideUnnamed {
+	id v = [[NSUserDefaults standardUserDefaults] objectForKey:kHideUnnamedKey];
+	return v ? [v boolValue] : YES;
+}
+
++ (void)setHideUnnamed:(BOOL)hide {
+	[[NSUserDefaults standardUserDefaults] setBool:hide forKey:kHideUnnamedKey];
+	[[NSNotificationCenter defaultCenter] postNotificationName:ALHideUnnamedChangedNotification object:nil];
+}
 
 - (instancetype)init {
 	if ((self = [super init])) {

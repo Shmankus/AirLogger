@@ -67,6 +67,9 @@ static const double kRecencyTauBT = 600.0;
 		initWithImage:[UIImage systemImageNamed:@"line.3.horizontal.decrease.circle"]
 				 menu:[self buildFilterMenu]];
 	self.navigationItem.leftBarButtonItem = self.filterButton;
+	[self rebuildFilterMenu]; // "Hide Unnamed" is on by default
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(hideUnnamedChanged)
+												 name:ALHideUnnamedChangedNotification object:nil];
 
 	// With no scroll view under it, iOS 15+ draws the nav bar in its transparent
 	// scroll-edge style over the map; keep the normal blurred background instead.
@@ -81,7 +84,8 @@ static const double kRecencyTauBT = 600.0;
 #pragma mark - Filters
 
 - (BOOL)anyFilterActive {
-	return self.typeFilter >= 0 || self.bandFilter.length > 0 || self.secFilter.length > 0;
+	return self.typeFilter >= 0 || self.bandFilter.length > 0 || self.secFilter.length > 0 ||
+		[ALDevice hideUnnamed];
 }
 
 - (UIMenu *)singleMenu:(NSString *)title options:(NSArray<NSString *> *)opts
@@ -131,8 +135,16 @@ static const double kRecencyTauBT = 600.0;
 							   options:@[@"All", @"Open", @"WEP", @"WPA/WPA2", @"WPA3"]
 							   current:self.secFilter setter:^(NSString *v) { ws.secFilter = v; }];
 
+	UIAction *hide = [UIAction actionWithTitle:@"Hide Unnamed" image:[UIImage systemImageNamed:@"eye.slash"]
+									identifier:nil handler:^(__kindof UIAction *action) {
+		[ALDevice setHideUnnamed:![ALDevice hideUnnamed]]; // -> hideUnnamedChanged
+	}];
+	hide.state = [ALDevice hideUnnamed] ? UIMenuElementStateOn : UIMenuElementStateOff;
+	UIMenu *nameMenu = [UIMenu menuWithTitle:@"Name" image:nil identifier:nil
+									 options:UIMenuOptionsDisplayInline children:@[hide]];
+
 	return [UIMenu menuWithTitle:@"" image:nil identifier:nil options:0
-						children:@[typeMenu, bandMenu, secMenu]];
+						children:@[nameMenu, typeMenu, bandMenu, secMenu]];
 }
 
 - (void)rebuildFilterMenu {
@@ -140,6 +152,12 @@ static const double kRecencyTauBT = 600.0;
 		([self anyFilterActive] ? @"line.3.horizontal.decrease.circle.fill"
 								 : @"line.3.horizontal.decrease.circle")];
 	self.filterButton.menu = [self buildFilterMenu];
+}
+
+- (void)hideUnnamedChanged {
+	if (!self.isViewLoaded) return;
+	[self rebuildFilterMenu];
+	if (self.view.window) [self recenter];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -221,6 +239,7 @@ static const double kRecencyTauBT = 600.0;
 		NSString *rid = r[@"identifier"];
 		if (!rid.length) continue;
 		NSString *band = @"", *sec = @"";
+		NSString *name = [r[@"name"] isKindOfClass:[NSString class]] ? r[@"name"] : @"";
 		NSString *infoStr = r[@"info"];
 		if (infoStr.length) {
 			id p = [NSJSONSerialization JSONObjectWithData:[infoStr dataUsingEncoding:NSUTF8StringEncoding]
@@ -230,10 +249,11 @@ static const double kRecencyTauBT = 600.0;
 				if (p[@"Security"]) sec = p[@"Security"];
 			}
 		}
-		metaInfo[rid] = @{ @"band": band, @"security": sec };
+		metaInfo[rid] = @{ @"band": band, @"security": sec, @"name": name };
 	}
 
 	double now = [NSDate date].timeIntervalSince1970;
+	BOOL hideUnnamed = [ALDevice hideUnnamed];
 	NSMutableArray *pins = [NSMutableArray array];
 
 	for (NSString *id_ in groups) {
@@ -250,6 +270,7 @@ static const double kRecencyTauBT = 600.0;
 		if (!focused && self.typeFilter >= 0 && t != self.typeFilter) continue;
 		if (!focused && self.bandFilter.length && ![band isEqualToString:self.bandFilter]) continue;
 		if (!focused && self.secFilter.length && ![sec hasPrefix:self.secFilter]) continue;
+		if (!focused && hideUnnamed && ![mi[@"name"] length]) continue;
 
 		double mlat = 0, mlon = 0; NSInteger best = -999;
 		for (NSDictionary *o in obs) {

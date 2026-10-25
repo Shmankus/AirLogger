@@ -4,7 +4,7 @@
 //  "All" tab. Lists every device ever stored (ALDatabase allDevices). No title:
 //  a type picker (All / Wi-Fi / BLE / Classic) is the nav bar's title view, with
 //  the search bar (name or identifier) under it, and a sort menu (Name / RSSI /
-//  Latest) on the right. Hosts the database-wipe (trash) button.
+//  Latest, plus the shared "Hide Unnamed" toggle) on the right. Hosts the database-wipe (trash) button.
 //
 
 #import "ALHistoryViewController.h"
@@ -74,6 +74,9 @@ static const NSInteger kTypeSegmentCount = 4;
 	self.sort = (saved >= ALHistorySortLatest && saved <= ALHistorySortName) ? saved : ALHistorySortLatest;
 	self.navigationItem.rightBarButtonItem =
 		[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.up.arrow.down"] menu:[self sortMenu]];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(hideUnnamedChanged)
+												 name:ALHideUnnamedChangedNotification object:nil];
 
 	UIRefreshControl *rc = [[UIRefreshControl alloc] init];
 	[rc addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
@@ -153,7 +156,21 @@ static const NSInteger kTypeSegmentCount = 4;
 		a.state = (self.sort == m) ? UIMenuElementStateOn : UIMenuElementStateOff;
 		[items addObject:a];
 	}
-	return [UIMenu menuWithTitle:@"Sort by" children:items];
+	UIMenu *sortSection = [UIMenu menuWithTitle:@"Sort by" image:nil identifier:nil
+										options:UIMenuOptionsDisplayInline children:items];
+	UIAction *hide = [UIAction actionWithTitle:@"Hide Unnamed" image:[UIImage systemImageNamed:@"eye.slash"]
+									identifier:nil handler:^(__kindof UIAction *action) {
+		[ALDevice setHideUnnamed:![ALDevice hideUnnamed]];
+	}];
+	hide.state = [ALDevice hideUnnamed] ? UIMenuElementStateOn : UIMenuElementStateOff;
+	UIMenu *filterSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil
+										  options:UIMenuOptionsDisplayInline children:@[hide]];
+	return [UIMenu menuWithTitle:@"" children:@[sortSection, filterSection]];
+}
+
+- (void)hideUnnamedChanged {
+	self.navigationItem.rightBarButtonItem.menu = [self sortMenu];
+	[self applyFilter];
 }
 
 - (void)setSortMode:(ALHistorySort)sort {
@@ -193,10 +210,12 @@ static const NSInteger kTypeSegmentCount = 4;
 - (void)applyFilter {
 	NSString *q = self.search.searchBar.text.lowercaseString;
 	NSInteger scope = self.typeControl.selectedSegmentIndex; // 0 all, else ALDeviceType + 1
+	BOOL hideUnnamed = [ALDevice hideUnnamed];
 
 	NSMutableArray *out = [NSMutableArray array];
 	for (ALDevice *d in self.all) {
 		if (scope > 0 && d.type != (ALDeviceType)(scope - 1)) continue;
+		if (hideUnnamed && !d.name.length) continue;
 		if (q.length &&
 			![d.name.lowercaseString containsString:q] &&
 			![d.identifier.lowercaseString containsString:q]) continue;

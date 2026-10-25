@@ -61,6 +61,7 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 @property (nonatomic, strong) NSTimer *connTimer;
 @property (nonatomic, strong) ALSpeedTest *speedTest;
 @property (nonatomic) BOOL swipeOpen; // a row's swipe actions are showing
+@property (nonatomic, strong) UIBarButtonItem *filterButton; // shared "Hide Unnamed" toggle
 @end
 
 @implementation ALRootViewController
@@ -87,11 +88,17 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	[self.tableView registerClass:[ALDeviceCell class] forCellReuseIdentifier:@"dev"];
 
 	// Start with the Pause icon (or Play, depending on initial state)
+	// (rightBarButtonItem, the first of the items, stays the pause button.)
 	UIImage *pauseImage = [UIImage systemImageNamed:@"pause.fill"];
-	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:pauseImage
+	UIBarButtonItem *pause = [[UIBarButtonItem alloc] initWithImage:pauseImage
 		style:UIBarButtonItemStylePlain
 		target:self
 		action:@selector(toggleScan)];
+	self.filterButton = [[UIBarButtonItem alloc] initWithImage:nil menu:nil];
+	self.navigationItem.rightBarButtonItems = @[pause, self.filterButton];
+	[self updateFilterButton];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(hideUnnamedChanged)
+												 name:ALHideUnnamedChangedNotification object:nil];
 
 
 	// Status bar (CarrierText tweak) mode picker.
@@ -411,6 +418,23 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 										 ? @"text.bubble" : @"text.bubble.fill")];
 }
 
+- (void)updateFilterButton {
+	BOOL hide = [ALDevice hideUnnamed];
+	UIAction *a = [UIAction actionWithTitle:@"Hide Unnamed" image:[UIImage systemImageNamed:@"eye.slash"]
+								 identifier:nil handler:^(__kindof UIAction *action) {
+		[ALDevice setHideUnnamed:![ALDevice hideUnnamed]]; // -> hideUnnamedChanged
+	}];
+	a.state = hide ? UIMenuElementStateOn : UIMenuElementStateOff;
+	self.filterButton.menu = [UIMenu menuWithTitle:@"" children:@[a]];
+	self.filterButton.image = [UIImage systemImageNamed:(hide ? @"line.3.horizontal.decrease.circle.fill"
+															  : @"line.3.horizontal.decrease.circle")];
+}
+
+- (void)hideUnnamedChanged {
+	[self updateFilterButton];
+	[self rebuildAndReload];
+}
+
 - (void)modeChanged:(UISegmentedControl *)sender {
 	self.mode = sender.selectedSegmentIndex;
 	[self rebuildAndReload];
@@ -505,7 +529,9 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	NSMutableArray *wifi = [NSMutableArray array];
 	NSMutableArray *ble = [NSMutableArray array];
 	NSMutableArray *classic = [NSMutableArray array];
+	BOOL hideUnnamed = [ALDevice hideUnnamed];
 	for (ALDevice *d in self.store.allValues) {
+		if (hideUnnamed && !d.name.length) continue;
 		// Live mode: only devices seen within the recent window.
 		if (self.mode == 0 && (now - d.lastSeen.timeIntervalSince1970) > kLiveWindow) continue;
 		if (d.type == ALDeviceTypeWiFi) [wifi addObject:d];
@@ -518,7 +544,8 @@ static const NSTimeInterval kConnectionRefresh = 5.0;
 	};
 
 	// Collapse Wi-Fi networks that share an SSID into one row, keeping each
-	// access point (BSSID) as a child. Hidden networks (no SSID) stay separate.
+	// access point (BSSID) as a child. Hidden networks (no SSID) stay separate
+	// (unless "Hide Unnamed" dropped them above).
 	NSMutableDictionary<NSString *, NSMutableArray<ALDevice *> *> *bySSID = [NSMutableDictionary dictionary];
 	NSMutableArray<ALDevice *> *wifiRows = [NSMutableArray array];
 	for (ALDevice *d in wifi) {

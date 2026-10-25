@@ -6,6 +6,9 @@ typedef NS_ENUM(NSInteger, ALDeviceType) {
 	ALDeviceTypeClassicBT,
 };
 
+// Posted when the shared "Hide unnamed" filter changes (every tab honors it).
+extern NSString *const ALHideUnnamedChangedNotification;
+
 @interface ALDevice : NSObject
 @property (nonatomic) ALDeviceType type;
 @property (nonatomic, copy) NSString *identifier;   // BSSID / UUID / MAC
@@ -21,6 +24,9 @@ typedef NS_ENUM(NSInteger, ALDeviceType) {
 @property (nonatomic, strong) NSArray<ALDevice *> *children; // per-AP breakdown for grouped Wi-Fi
 
 + (NSString *)nameForType:(ALDeviceType)type;
+// "Hide unnamed" filter, shared by the Current / All / Map tabs; on by default.
++ (BOOL)hideUnnamed;
++ (void)setHideUnnamed:(BOOL)hide;
 - (NSString *)displayName;
 - (NSString *)sightingsText; // "300 heard" / "2 places"
 @end
